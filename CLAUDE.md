@@ -28,7 +28,7 @@ On Linux the Tauri system deps are needed (webkit2gtk-4.1, ayatana-appindicator,
 2. `npm run release -- <x.y.z> "<short user-facing notes>"`
    - This bumps the version in tauri.conf.json, package.json, package-lock.json, Cargo.toml and Cargo.lock, writes the notes to `RELEASE_NOTES.md`, commits "Release vX" and pushes `main`. No tags are pushed; some environments block tag pushes.
    - Use a patch version for fixes, minor for features. It must be higher than the current version.
-3. `.github/workflows/release.yml` runs when tauri.conf.json changes on main. If there's no release for that version yet, it runs the tests, builds the NSIS installer on windows-latest, signs it, creates tag + GitHub Release `vX.Y.Z` (notes from RELEASE_NOTES.md) and uploads `latest.json`. You can re-run it from the Actions tab (workflow_dispatch).
+3. `.github/workflows/release.yml` runs on every push to main. If there's no release for that version yet, it runs the tests, builds the NSIS installer on windows-latest, signs it, creates tag + GitHub Release `vX.Y.Z` (notes from RELEASE_NOTES.md) and uploads `latest.json`. You can re-run it from the Actions tab (workflow_dispatch).
 4. Installed apps check `releases/latest/download/latest.json` at startup and every 6 h, show "Update to X" in settings and the tray, and install when the user clicks it.
 
 Check a release: `curl -sL https://github.com/TohmKench/minimap-nudge/releases/latest/download/latest.json`

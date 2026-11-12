@@ -1,5 +1,6 @@
-# Publishes a release whenever the app version on main changes (use `npm run release`).
-# If no GitHub release exists yet for the version in tauri.conf.json, this builds the
+# Publishes a release whenever main has a version that isn't released yet (use `npm run release`).
+# On every push to main: if no GitHub release exists for the version in tauri.conf.json
+# (checked in a few seconds; otherwise the job stops there), this builds the
 # Windows installer, signs it for the in-app updater, creates tag + release vX.Y.Z
 # and uploads latest.json, which installed copies check to find updates.
 # Release notes come from RELEASE_NOTES.md (written by the release script).
@@ -8,7 +9,6 @@ name: release
 on:
   push:
     branches: [main]
-    paths: ['src-tauri/tauri.conf.json']
   workflow_dispatch:
 
 permissions:
