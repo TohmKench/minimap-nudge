@@ -2393,7 +2393,7 @@ checksum = "68354c5c6bd36d73ff3feceb05efa59b6acb7626617f4962be322a825e61f79a"
 
 [[package]]
 name = "minimap-nudge"
-version = "2.2.1"
+version = "2.3.0"
 dependencies = [
  "chrono",
  "native-tls",
