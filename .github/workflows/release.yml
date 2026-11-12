@@ -1,64 +1,87 @@
-# Publishes a release when a version tag (v1.2.3) is pushed — use `npm run release`.
-# Builds the Windows installer, signs it for the in-app updater and uploads
-# latest.json, which installed copies check to find updates.
+# Publishes a release whenever the app version on main changes (use `npm run release`).
+# If no GitHub release exists yet for the version in tauri.conf.json, this builds the
+# Windows installer, signs it for the in-app updater, creates tag + release vX.Y.Z
+# and uploads latest.json, which installed copies check to find updates.
+# Release notes come from RELEASE_NOTES.md (written by the release script).
 name: release
 
 on:
   push:
-    tags: ['v*']
+    branches: [main]
+    paths: ['src-tauri/tauri.conf.json']
+  workflow_dispatch:
 
 permissions:
   contents: write
+
+concurrency:
+  group: release
+  cancel-in-progress: false
 
 jobs:
   release:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
 
-      - name: Read release notes from the tag
-        id: notes
+      - name: Work out version and whether it's already released
+        id: v
         shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          git fetch --force origin "refs/tags/${GITHUB_REF_NAME}:refs/tags/${GITHUB_REF_NAME}"
+          v=$(node -p "require('./src-tauri/tauri.conf.json').version")
+          echo "version=$v" >> "$GITHUB_OUTPUT"
+          if gh release view "v$v" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "v$v is already released; nothing to do."
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+          fi
           {
-            echo 'body<<__NOTES__'
-            git tag -l --format='%(contents)' "$GITHUB_REF_NAME" | sed '/-----BEGIN PGP SIGNATURE-----/,$d'
+            echo 'notes<<__NOTES__'
+            if [ -f RELEASE_NOTES.md ]; then cat RELEASE_NOTES.md; else echo "Minimap Nudge v$v"; fi
             echo '__NOTES__'
           } >> "$GITHUB_OUTPUT"
 
-      - name: Check tag matches app version
+      - name: Check the signing key secret is set
+        if: steps.v.outputs.skip == 'false'
         shell: bash
+        env:
+          KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
         run: |
-          v=$(node -p "require('./src-tauri/tauri.conf.json').version")
-          [ "v$v" = "$GITHUB_REF_NAME" ] || { echo "Tag $GITHUB_REF_NAME != tauri.conf.json version $v"; exit 1; }
+          [ -n "$KEY" ] || { echo "::error::Repo secret TAURI_SIGNING_PRIVATE_KEY is missing (Settings > Secrets and variables > Actions)"; exit 1; }
 
       - uses: actions/setup-node@v4
+        if: steps.v.outputs.skip == 'false'
         with:
           node-version: 22
           cache: npm
       - uses: dtolnay/rust-toolchain@stable
+        if: steps.v.outputs.skip == 'false'
       - uses: Swatinem/rust-cache@v2
+        if: steps.v.outputs.skip == 'false'
         with:
           workspaces: src-tauri
 
-      - run: npm ci
-      - name: Tests
+      - name: Install and test
+        if: steps.v.outputs.skip == 'false'
         run: |
+          npm ci
           npm run test:js
           cargo test --manifest-path src-tauri/Cargo.toml
 
       - uses: tauri-apps/tauri-action@v0
+        if: steps.v.outputs.skip == 'false'
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         with:
-          tagName: ${{ github.ref_name }}
-          releaseName: Minimap Nudge ${{ github.ref_name }}
-          releaseBody: ${{ steps.notes.outputs.body }}
+          tagName: v__VERSION__
+          releaseName: Minimap Nudge v__VERSION__
+          releaseBody: ${{ steps.v.outputs.notes }}
+          releaseCommitish: ${{ github.sha }}
           releaseDraft: false
           prerelease: false
           includeUpdaterJson: true

@@ -1,9 +1,12 @@
 #!/usr/bin/env node
-// Bumps the version everywhere, commits, tags and pushes. GitHub Actions then
-// builds, signs and publishes the release, and installed apps offer the update.
+// Bumps the version everywhere, writes RELEASE_NOTES.md, commits and pushes to
+// main. GitHub Actions (release.yml) sees the new version, then builds, signs and
+// publishes release vX.Y.Z (it creates the tag itself), and installed apps offer
+// the update. No tag push needed.
 //
-//   npm run release -- 2.2.0 "Shorter pings; new bell sound"
-//   npm run release -- 2.2.0 "notes" --no-push     (commit + tag only)
+//   npm run release -- 2.2.0 "Shorter pings
+//   - New bell sound"
+//   npm run release -- 2.2.0 "notes" --no-push     (commit only)
 import { execSync } from 'node:child_process';
 import { readFileSync, writeFileSync } from 'node:fs';
 
@@ -19,7 +22,8 @@ const conf = JSON.parse(readFileSync('src-tauri/tauri.conf.json', 'utf8'));
 const cmp = (a, b) => { const x = a.split('.').map(Number), y = b.split('.').map(Number); for (let i = 0; i < 3; i++) if (x[i] !== y[i]) return x[i] - y[i]; return 0; };
 if (cmp(version, conf.version) <= 0) fail(`${version} must be higher than the current ${conf.version}`);
 if (sh('git status --porcelain')) fail('working tree has uncommitted changes — commit or stash them first');
-if (sh(`git tag -l v${version}`)) fail(`tag v${version} already exists`);
+const branch = sh('git rev-parse --abbrev-ref HEAD');
+if (push && branch !== 'main') fail(`releases are published from main (you're on ${branch})`);
 
 const edit = (file, fn) => writeFileSync(file, fn(readFileSync(file, 'utf8')));
 edit('src-tauri/tauri.conf.json', (s) => s.replace(/("version":\s*")[^"]+(")/, `$1${version}$2`));
@@ -33,15 +37,15 @@ edit('package-lock.json', (s) => {
 edit('src-tauri/Cargo.toml', (s) => s.replace(/^version = "[^"]+"/m, `version = "${version}"`));
 edit('src-tauri/Cargo.lock', (s) => s.replace(/(name = "minimap-nudge"\nversion = ")[^"]+(")/, `$1${version}$2`));
 
-sh('git add src-tauri/tauri.conf.json package.json package-lock.json src-tauri/Cargo.toml src-tauri/Cargo.lock');
+writeFileSync('RELEASE_NOTES.md', notes.trim() + '\n');
+sh('git add RELEASE_NOTES.md src-tauri/tauri.conf.json package.json package-lock.json src-tauri/Cargo.toml src-tauri/Cargo.lock');
 sh(`git commit -m "Release v${version}"`);
-writeFileSync('.git/RELEASE_NOTES', notes.trim() + '\n');
-sh(`git tag -a v${version} -F .git/RELEASE_NOTES`);
-console.log(`Committed and tagged v${version}.`);
+console.log(`Committed "Release v${version}".`);
 
 if (push) {
-  execSync('git push origin HEAD --follow-tags', { stdio: 'inherit' });
+  execSync('git push origin main', { stdio: 'inherit' });
   console.log(`Pushed. GitHub Actions is building v${version}; installed apps will offer it once the release is published (~10 min).`);
+  console.log('Watch it: https://github.com/TohmKench/minimap-nudge/actions');
 } else {
-  console.log('Not pushed. Run: git push origin HEAD --follow-tags');
+  console.log('Not pushed. Run: git push origin main');
 }

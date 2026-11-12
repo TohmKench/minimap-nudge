@@ -61,7 +61,7 @@ npm run mock-game -- --start 590 --speed 10 --mode ARAM --end-after 60
 
 ### Releasing
 
-`npm run release -- 2.2.0 "What changed"` bumps the version everywhere, commits, tags and pushes. GitHub Actions (`.github/workflows/release.yml`) then tests, builds and signs the installer, and publishes the release with `latest.json`, which installed apps pick up. See `CLAUDE.md` for the full process and rules.
+`npm run release -- 2.2.0 "What changed"` bumps the version everywhere, writes `RELEASE_NOTES.md`, commits and pushes `main`. GitHub Actions (`.github/workflows/release.yml`) sees the new version, then tests, builds and signs the installer, and publishes release `v2.2.0` with `latest.json`, which installed apps pick up. See `CLAUDE.md` for the full process and rules.
 
 ### Cross-compiling for Windows from Ubuntu
 
