@@ -3,6 +3,7 @@
 //! The state machine (`Watcher::apply`) is pure so it can be unit-tested; the
 //! network part (`poll_once`) fetches from the game and feeds it in.
 
+use crate::lcu::{ClientInfo, Lcu, Phase as ClientPhase};
 use crate::league::{GameStats, LeagueClient};
 use crate::schedule::{format_clock, next_alert_after};
 use crate::settings::Settings;
@@ -20,6 +21,8 @@ pub const SUMMONERS_RIFT: i64 = 11;
 #[serde(rename_all = "lowercase")]
 pub enum State {
     Waiting,
+    /// League client open, not in a game (lobby, queue, champ select…). Details in `client`.
+    Client,
     Active,
     Paused,
     Ineligible,
@@ -36,6 +39,9 @@ pub struct Status {
     pub map_number: Option<i64>,
     pub next_alert: Option<f64>,
     pub line: String,
+    pub client: Option<ClientInfo>,
+    /// Whether pings will play for the upcoming/current game (false = mode isn't Summoner's Rift and SR-only is on).
+    pub will_ping: bool,
 }
 
 /// What happened during one poll, for logging.
@@ -46,6 +52,7 @@ pub enum Event {
     SkippedLate { due: f64, game_time: f64 },
     GameEnded,
     GameClosed,
+    ClientPhase { phase: Option<ClientPhase>, queue: Option<String> },
 }
 
 #[derive(Debug)]
@@ -58,6 +65,7 @@ pub struct Watcher {
     next_alert: Option<f64>,
     last_end_check: Option<Instant>,
     pub end_check_interval: Duration,
+    client: Option<ClientInfo>,
 }
 
 impl Default for Watcher {
@@ -71,6 +79,7 @@ impl Default for Watcher {
             next_alert: None,
             last_end_check: None,
             end_check_interval: END_CHECK_INTERVAL,
+            client: None,
         }
     }
 }
@@ -81,7 +90,28 @@ impl Watcher {
     }
 
     fn reset(&mut self) {
-        *self = Self { end_check_interval: self.end_check_interval, ..Self::default() };
+        *self = Self { end_check_interval: self.end_check_interval, client: self.client.take(), ..Self::default() };
+    }
+
+    /// Latest League client state (`None` = client not running). Returns an event when the phase changes.
+    pub fn set_client(&mut self, info: Option<ClientInfo>) -> Option<Event> {
+        let old = self.client.as_ref().map(|c| c.phase.clone());
+        let new = info.as_ref().map(|c| c.phase.clone());
+        let queue = info.as_ref().and_then(|c| c.queue.clone());
+        self.client = info;
+        (old != new).then_some(Event::ClientPhase { phase: new, queue })
+    }
+
+    pub fn in_game(&self) -> bool {
+        self.in_game
+    }
+
+    fn will_ping(&self, s: &Settings) -> bool {
+        if !s.summoners_rift_only {
+            return true;
+        }
+        let map = self.map_number.or(self.client.as_ref().and_then(|c| c.map_id));
+        map.map_or(true, |m| m == SUMMONERS_RIFT)
     }
 
     fn eligible(&self, s: &Settings) -> bool {
@@ -163,6 +193,8 @@ impl Watcher {
             }
         } else if !s.enabled {
             State::Paused
+        } else if self.client.is_some() {
+            State::Client
         } else {
             State::Waiting
         };
@@ -173,13 +205,17 @@ impl Watcher {
                 format_clock(self.next_alert)
             ),
             State::Paused if self.in_game => format!("In game {} · alerts paused", format_clock(self.game_time)),
-            State::Paused => "Alerts paused".into(),
+            State::Paused => match &self.client {
+                Some(c) => format!("Alerts paused · {}", client_line(c)),
+                None => "Alerts paused".into(),
+            },
+            State::Client => client_line(self.client.as_ref().expect("client state")),
             State::Ineligible => format!(
                 "In game ({}) · not Summoner's Rift, staying quiet",
                 self.game_mode.as_deref().unwrap_or("?")
             ),
             State::Ended => "Game over · waiting for next match".into(),
-            State::Waiting => "Waiting for a match".into(),
+            State::Waiting => "Waiting for League".into(),
         };
         Status {
             state,
@@ -189,18 +225,62 @@ impl Watcher {
             map_number: self.map_number,
             next_alert: self.next_alert,
             line,
+            client: if self.in_game { None } else { self.client.clone() },
+            will_ping: self.will_ping(s),
         }
     }
 }
 
-/// One poll: ask the game, update the watcher. Never holds the lock across the network.
-pub async fn poll_once(client: &LeagueClient, watcher: &Mutex<Watcher>, settings: &Settings) -> (Vec<Event>, Status) {
+/// One-line description of what the client is doing (tray tooltip, log).
+pub fn client_line(c: &ClientInfo) -> String {
+    let q = c.queue.as_deref();
+    let with_q = |base: &str| match q {
+        Some(q) => format!("{base} · {q}"),
+        None => base.to_string(),
+    };
+    match c.phase {
+        ClientPhase::None | ClientPhase::Other => "League client open".into(),
+        ClientPhase::Lobby => {
+            let mut l = with_q("In lobby");
+            if let Some(n) = c.party_size.filter(|n| *n > 1) {
+                l.push_str(&format!(" · party of {n}"));
+            }
+            l
+        }
+        ClientPhase::Matchmaking => {
+            let mut l = with_q("In queue");
+            if let Some(t) = c.time_in_queue {
+                l.push_str(&format!(" · {}", format_clock(Some(t))));
+            }
+            l
+        }
+        ClientPhase::ReadyCheck => "Match found — accept it!".into(),
+        ClientPhase::ChampSelect => with_q("Champion select"),
+        ClientPhase::GameStart | ClientPhase::InProgress => "Loading into game…".into(),
+        ClientPhase::Reconnect => "Reconnect to your game".into(),
+        ClientPhase::PostGame => "Post-game".into(),
+    }
+}
+
+/// One poll: ask the game (and, when not in one, the client), update the watcher.
+/// Never holds the lock across the network.
+pub async fn poll_once(
+    client: &LeagueClient,
+    lcu: &Lcu,
+    watcher: &Mutex<Watcher>,
+    settings: &Settings,
+) -> (Vec<Event>, Status) {
     let stats = client.game_stats().await;
     let now = Instant::now();
     let check_end = stats.is_some() && watcher.lock().unwrap().end_check_due(now);
     let ended = if check_end { Some(client.game_ended().await) } else { None };
+    // The client's state only matters outside a game; skip those calls while playing.
+    let client_info = if stats.is_none() { Some(lcu.snapshot().await) } else { None };
     let mut w = watcher.lock().unwrap();
-    let events = w.apply(stats, ended, settings, now);
+    let mut events = w.apply(stats, ended, settings, now);
+    if let Some(info) = client_info {
+        events.extend(w.set_client(info));
+    }
     (events, w.status(settings))
 }
 
@@ -269,6 +349,56 @@ mod tests {
         assert_eq!(w.status(&s).state, State::Paused);
         w.apply(sr(102.0), Some(true), &s, t0);
         assert_eq!(w.status(&s).state, State::Ended);
+    }
+
+    fn client(phase: ClientPhase, map: Option<i64>) -> Option<ClientInfo> {
+        Some(ClientInfo {
+            phase,
+            queue_id: Some(420),
+            queue: Some("Ranked Solo/Duo".into()),
+            map_id: map,
+            party_size: Some(2),
+            time_in_queue: Some(83.0),
+            est_queue_time: Some(120.0),
+            champ_select_stage: None,
+            phase_time_left: None,
+        })
+    }
+
+    #[test]
+    fn client_states_and_lines() {
+        let mut s = settings();
+        let mut w = Watcher::new();
+        assert_eq!(w.status(&s).line, "Waiting for League");
+        assert!(matches!(w.set_client(client(ClientPhase::Lobby, Some(11))), Some(Event::ClientPhase { .. })));
+        assert_eq!(w.set_client(client(ClientPhase::Lobby, Some(11))), None, "same phase -> no event");
+        let st = w.status(&s);
+        assert_eq!(st.state, State::Client);
+        assert_eq!(st.line, "In lobby · Ranked Solo/Duo · party of 2");
+        assert!(st.will_ping);
+
+        w.set_client(client(ClientPhase::Matchmaking, Some(11)));
+        assert_eq!(w.status(&s).line, "In queue · Ranked Solo/Duo · 1:23");
+        w.set_client(client(ClientPhase::ReadyCheck, Some(11)));
+        assert_eq!(w.status(&s).line, "Match found — accept it!");
+        w.set_client(client(ClientPhase::ChampSelect, Some(12)));
+        assert!(!w.status(&s).will_ping, "ARAM map with SR-only");
+        s.summoners_rift_only = false;
+        assert!(w.status(&s).will_ping);
+
+        // once the game is live, in-game status wins and client details are hidden
+        w.apply(sr(30.0), None, &s, Instant::now());
+        let st = w.status(&s);
+        assert_eq!(st.state, State::Active);
+        assert!(st.client.is_none());
+
+        // paused shows what the client is doing too
+        let mut w = Watcher::new();
+        w.set_client(client(ClientPhase::ChampSelect, Some(11)));
+        s.enabled = false;
+        assert_eq!(w.status(&s).line, "Alerts paused · Champion select · Ranked Solo/Duo");
+        assert!(matches!(w.set_client(None), Some(Event::ClientPhase { phase: None, .. })));
+        assert_eq!(w.status(&s).line, "Alerts paused");
     }
 
     #[test]

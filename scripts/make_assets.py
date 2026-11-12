@@ -76,4 +76,5 @@ icon(256, '#3ecfb2').save(os.path.join(ROOT, 'icon.png'))
 icon(256, '#3ecfb2').save(os.path.join(ROOT, 'icon.ico'), sizes=[(16, 16), (24, 24), (32, 32), (48, 48), (64, 64), (128, 128), (256, 256)])
 icon(64, '#3ecfb2').save(os.path.join(ROOT, 'tray-active.png'))
 icon(64, '#8b98a5').save(os.path.join(ROOT, 'tray-idle.png'))
+icon(64, '#1f8f7a').save(os.path.join(ROOT, 'tray-client.png'))  # client open, not in game
 print('assets written')

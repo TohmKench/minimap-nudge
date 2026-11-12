@@ -1,4 +1,5 @@
 pub mod audio;
+pub mod lcu;
 pub mod league;
 pub mod logger;
 pub mod schedule;
@@ -31,7 +32,14 @@ struct TrayUi {
     enabled_item: CheckMenuItem<Wry>,
     update_item: MenuItem<Wry>,
     last_key: String,
-    active_icon: Option<bool>,
+    icon_kind: Option<IconKind>,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum IconKind {
+    Idle,
+    Client,
+    InGame,
 }
 
 struct AppState {
@@ -162,11 +170,11 @@ fn open_window(app: &AppHandle) {
 
 // ---------------------------------------------------------------- tray
 
-fn tray_icon(active: bool) -> Image<'static> {
-    let bytes: &[u8] = if active {
-        include_bytes!("../icons/tray-active.png")
-    } else {
-        include_bytes!("../icons/tray-idle.png")
+fn tray_icon(kind: IconKind) -> Image<'static> {
+    let bytes: &[u8] = match kind {
+        IconKind::InGame => include_bytes!("../icons/tray-active.png"),
+        IconKind::Client => include_bytes!("../icons/tray-client.png"),
+        IconKind::Idle => include_bytes!("../icons/tray-idle.png"),
     };
     Image::from_bytes(bytes).expect("tray icon")
 }
@@ -188,10 +196,14 @@ fn refresh_tray(app: &AppHandle, st: &Status) {
     let tip: String = format!("Minimap Nudge — {}", st.line).chars().take(127).collect();
     let _ = ui.tray.set_tooltip(Some(&tip));
 
-    let active = st.state == State::Active;
-    if ui.active_icon != Some(active) {
-        let _ = ui.tray.set_icon(Some(tray_icon(active)));
-        ui.active_icon = Some(active);
+    let kind = match st.state {
+        State::Active => IconKind::InGame,
+        State::Client => IconKind::Client,
+        _ => IconKind::Idle,
+    };
+    if ui.icon_kind != Some(kind) {
+        let _ = ui.tray.set_icon(Some(tray_icon(kind)));
+        ui.icon_kind = Some(kind);
     }
 
     let coarse = coarse_line(st);
@@ -205,7 +217,7 @@ fn refresh_tray(app: &AppHandle, st: &Status) {
 
 fn build_tray(app: &AppHandle) -> tauri::Result<TrayUi> {
     let enabled = current_settings(app).enabled;
-    let status_item = MenuItem::with_id(app, "status", "Waiting for a match", false, None::<&str>)?;
+    let status_item = MenuItem::with_id(app, "status", "Waiting for League", false, None::<&str>)?;
     let enabled_item = CheckMenuItem::with_id(app, "enabled", "Alerts enabled", true, enabled, None::<&str>)?;
     let update_item = MenuItem::with_id(app, "update", "Check for updates", true, None::<&str>)?;
     let menu = Menu::with_items(
@@ -224,8 +236,8 @@ fn build_tray(app: &AppHandle) -> tauri::Result<TrayUi> {
     )?;
 
     let tray = TrayIconBuilder::with_id("main-tray")
-        .icon(tray_icon(false))
-        .tooltip("Minimap Nudge — Waiting for a match")
+        .icon(tray_icon(IconKind::Idle))
+        .tooltip("Minimap Nudge — Waiting for League")
         .menu(&menu)
         .show_menu_on_left_click(false)
         .on_menu_event(|app, event| match event.id().as_ref() {
@@ -267,7 +279,7 @@ fn build_tray(app: &AppHandle) -> tauri::Result<TrayUi> {
         })
         .build(app)?;
 
-    Ok(TrayUi { tray, status_item, enabled_item, update_item, last_key: String::new(), active_icon: Some(false) })
+    Ok(TrayUi { tray, status_item, enabled_item, update_item, last_key: String::new(), icon_kind: Some(IconKind::Idle) })
 }
 
 /// Keeps the tray's update item in step with the updater.
@@ -373,6 +385,7 @@ fn spawn_watcher(app: AppHandle) {
     let base = std::env::var("MINIMAP_NUDGE_API").unwrap_or_else(|_| league::DEFAULT_BASE.to_string());
     tauri::async_runtime::spawn(async move {
         let client = LeagueClient::new(base);
+        let lcu = lcu::Lcu::from_env();
         let mut tick = tokio::time::interval(watcher::POLL_INTERVAL);
         tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
         let mut last_state = None;
@@ -380,7 +393,7 @@ fn spawn_watcher(app: AppHandle) {
             tick.tick().await;
             let settings = current_settings(&app);
             let state = app.state::<AppState>();
-            let (events, status) = watcher::poll_once(&client, &state.watcher, &settings).await;
+            let (events, status) = watcher::poll_once(&client, &lcu, &state.watcher, &settings).await;
 
             for ev in events {
                 match ev {
@@ -398,6 +411,13 @@ fn spawn_watcher(app: AppHandle) {
                     )),
                     Event::GameEnded => log("game ended"),
                     Event::GameClosed => log("game closed"),
+                    Event::ClientPhase { phase, queue } => match phase {
+                        Some(p) => log(&format!(
+                            "client: {p:?}{}",
+                            queue.map(|q| format!(" ({q})")).unwrap_or_default()
+                        )),
+                        None => log("client: not running"),
+                    },
                 }
             }
             if last_state != Some(status.state) {

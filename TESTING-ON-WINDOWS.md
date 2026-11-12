@@ -19,7 +19,11 @@ The schedule logic, sound decoding and game detection were tested on Linux and a
 3. Check whether any `msedgewebview2.exe` processes are left. They belong to the settings window and should disappear a few seconds after you close it.
 4. Open settings from the tray and compare. The WebView2 processes come back while the window is open, and that's expected.
 
-## 3. A real game
+## 3. The League client (before a game)
+
+With League open, the settings header should follow along: **League client open → In lobby → In queue (with a timer) → Match found! → Champion select → Loading into game**. The tray icon turns dim teal while the client is open. If it stays on "Waiting for League" while the client is open, check the log for `client:` lines and send it to me; game detection still works either way.
+
+## 4. A real game
 
 1. Leave the app in the tray and play a normal Summoner's Rift game, or a Practice Tool session (it uses the same API).
 2. Once you're loaded in, the tray icon should turn teal, and the tooltip should read "In game 0:45 · next ping 3:00".

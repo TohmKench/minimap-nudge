@@ -6,8 +6,9 @@ Windows tray app (Tauri 2 + Rust) that detects a League of Legends match through
 - `src/`: settings page (plain HTML/CSS/JS, no build step). `bridge.js` exposes `window.nudge` on top of Tauri IPC. `schedule.js` is the JS copy of the scheduler, used only for the timeline preview.
 - `src-tauri/src/`:
   - `lib.rs`: tray, window lifecycle (the window is destroyed on close; the app lives in the tray), commands, polling loop
-  - `watcher.rs`: pure game state machine
-  - `league.rs`: API client
+  - `watcher.rs`: pure game state machine, which also merges in the client state for the status line
+  - `league.rs`: in-game API client (Live Client Data, port 2999; official)
+  - `lcu.rs`: League *client* API (lobby/queue/champ select). Credentials come from the `lockfile` in the install folder or the LeagueClientUx command line. Read-only and unofficial: failures must degrade to "Waiting for League", never break game detection
   - `schedule.rs`: the real scheduler
   - `settings.rs`: JSON settings; built-in sounds are embedded
   - `audio.rs`: symphonia decode + rodio playback
@@ -20,6 +21,8 @@ Windows tray app (Tauri 2 + Rust) that detects a League of Legends match through
 npm test                 # JS vectors + all Rust tests (must pass before any release)
 npm run dev              # run locally
 npm run mock-game -- --start 170 --speed 10   # fake League match on :2999
+npm run mock-game -- --client --league-dir /tmp/fake-league   # fake client: lobby -> queue -> champ select -> game
+MINIMAP_NUDGE_LEAGUE_DIR=/tmp/fake-league npm run dev            # point the app at that fake client
 ```
 On Linux the Tauri system deps are needed (webkit2gtk-4.1, ayatana-appindicator, librsvg, alsa).
 
@@ -42,6 +45,7 @@ Check a release: `curl -sL https://github.com/TohmKench/minimap-nudge/releases/l
 - Pushing needs GitHub credentials on the machine (`gh auth login`, or an SSH key added to TohmKench).
 
 ## Behaviour to preserve
+- Outside a game the header/tray show the client phase (lobby, queue + timer, ready check, champ select + timer, loading, post-game). In-game state always wins over client state. LCU is polled only while not in a game.
 - Pings follow the in-game clock. No backlog when joining mid-game; a ping more than 10 s late is skipped; quiet after GameEnd; "Summoner's Rift only" means mapNumber 11.
 - Never auto-install updates; installing only happens when the user clicks.
 - A bad audio file must never crash the app (decoders are wrapped in catch_unwind).

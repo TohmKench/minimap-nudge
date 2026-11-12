@@ -61,6 +61,24 @@ body {
   border: 2px solid var(--accent);
   animation: pulse 2s ease-out infinite;
 }
+/* League client open (lobby, queue, champ select…) */
+.status[data-state="client"] .radar { border-color: var(--accent-dim); }
+.status[data-state="client"] .radar span { background: #1f8f7a; }
+.status[data-state="client"][data-phase="matchmaking"] .radar::after,
+.status[data-state="client"][data-phase="champSelect"] .radar::after,
+.status[data-state="client"][data-phase="gameStart"] .radar::after,
+.status[data-state="client"][data-phase="inProgress"] .radar::after {
+  content: ""; position: absolute; inset: -2px; border-radius: 50%;
+  border: 2px solid #1f8f7a;
+  animation: pulse 2.6s ease-out infinite;
+}
+.status[data-state="client"][data-phase="readyCheck"] .radar { border-color: var(--warn); }
+.status[data-state="client"][data-phase="readyCheck"] .radar span { background: var(--warn); }
+.status[data-state="client"][data-phase="readyCheck"] .radar::after {
+  content: ""; position: absolute; inset: -2px; border-radius: 50%;
+  border: 2px solid var(--warn);
+  animation: pulse 1s ease-out infinite;
+}
 .status[data-state="paused"] .radar span,
 .status[data-state="ineligible"] .radar span { background: var(--warn); }
 .status.flash { animation: flash 0.8s ease-out; }

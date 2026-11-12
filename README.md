@@ -24,6 +24,7 @@ Settings, uploaded sounds and the log are stored in `%APPDATA%\com.thomas.minima
 ## Behaviour
 
 - **Detection:** it polls Riot's official Live Client Data API (`https://127.0.0.1:2999`) once a second. Pings follow the in-game clock, so pauses and reconnects are handled.
+- **Client tracking:** outside a game it reads the League client's local API to show what you're doing: lobby (queue and party size), in queue (timer and estimate), match found, champion select (stage, time left, and whether pings will play in that mode), loading, and post-game. The tray icon is grey when League is closed, dim teal while the client is open, and bright teal in a game. This API is read-only but not officially supported by Riot; if it changes, the app just shows "Waiting for League" until the game starts, and pinging is unaffected.
 - **Schedule:** phases such as "every 3 min, from 10:00 every 1 min, from 25:00 silent".
   - Each phase pings when it starts.
   - Pings less than 15 s after the previous one are merged.
@@ -48,6 +49,8 @@ npm test             # JS schedule tests + all Rust tests
 npm run build        # Windows: installer in src-tauri/target/release/bundle/nsis/
 npm run mock-game    # fake League match on :2999 (close League first)
 npm run mock-game -- --start 590 --speed 10 --mode ARAM --end-after 60
+npm run mock-game -- --client --league-dir C:\temp\fake-league   # fake client too; then run the app with
+                                                               # MINIMAP_NUDGE_LEAGUE_DIR=C:\temp\fake-league
 ```
 
 ### Tests
@@ -56,6 +59,7 @@ npm run mock-game -- --start 590 --speed 10 --mode ARAM --end-after 60
 |---|---|
 | `tests/schedule-vectors.json` | Shared cases run against **both** the Rust scheduler and the JS copy used for the settings-page preview, so they can't drift apart |
 | `src-tauri/src/*` unit tests | Schedule, watcher state machine, settings (including reading 1.0 files), audio decoding of every format, junk and truncated files never crash, playback with no sound device |
+| `src-tauri/tests/lcu_mock.rs` | The League-client code against a fake client: lockfile discovery, password, every phase, ARAM, client closing, wrong password |
 | `src-tauri/tests/watcher_mock.rs` | The real HTTP client against an in-process fake League server (self-signed HTTPS) with a test-controlled clock: phase changes, joining mid-game, ARAM, GameEnd, disabled, game closing |
 | `test/schedule.test.js` | The JS side of the shared vectors |
 
@@ -76,7 +80,8 @@ src/                 settings page (HTML/CSS/JS) + bridge.js (Tauri IPC) + sched
 src-tauri/src/
   lib.rs             tray, window lifecycle, commands, polling loop
   watcher.rs         game state machine (pure) + poll_once
-  league.rs          Live Client Data API client
+  league.rs          Live Client Data API client (in game)
+  lcu.rs             League client API (lobby, queue, champ select)
   schedule.rs        phase → ping times (port of schedule.js)
   settings.rs        JSON settings + built-in sounds (embedded in the exe)
   audio.rs           symphonia decoding + rodio playback thread

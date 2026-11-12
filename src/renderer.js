@@ -34,17 +34,87 @@ async function save(patch) {
 // ------------------------------------------------------------ status
 
 const STATUS_TITLES = {
-  waiting: 'Waiting for a match',
+  waiting: 'Waiting for League',
   active: 'In game — watching the clock',
   paused: 'Reminders paused',
   ineligible: 'In game — staying quiet',
   ended: 'Game over',
 };
 
+const CLIENT_TITLES = {
+  none: 'League client open',
+  other: 'League client open',
+  lobby: 'In lobby',
+  matchmaking: 'In queue',
+  readyCheck: 'Match found!',
+  champSelect: 'Champion select',
+  gameStart: 'Loading into game',
+  inProgress: 'Loading into game',
+  reconnect: 'Reconnect available',
+  postGame: 'Post-game',
+};
+
+function firstPing() {
+  const phases = state && state.settings ? state.settings.phases : [];
+  return formatClock(Schedule.nextAlertAfter(phases, 0));
+}
+
+function pingNote(st) {
+  return st.willPing
+    ? el('span', {}, 'first ping at ', el('span', { class: 'mono' }, firstPing()))
+    : 'this mode stays quiet (Summoner\u2019s Rift only)';
+}
+
+function clientSub(st) {
+  const c = st.client;
+  const parts = [];
+  const add = (x) => { if (x != null && x !== '') parts.push(x); };
+  switch (c.phase) {
+    case 'lobby':
+      add(c.queue);
+      if (c.partySize > 1) add(`party of ${c.partySize}`);
+      if (!parts.length) add('Pick a queue and it\u2019ll follow along.');
+      break;
+    case 'matchmaking':
+      add(c.queue);
+      if (c.timeInQueue != null) {
+        add(el('span', {}, el('span', { class: 'mono' }, formatClock(c.timeInQueue)),
+          c.estQueueTime ? ` in queue (est. ${formatClock(c.estQueueTime)})` : ' in queue'));
+      }
+      break;
+    case 'readyCheck':
+      add('Accept it in the client');
+      break;
+    case 'champSelect':
+      add(c.queue);
+      if (c.champSelectStage) add(c.phaseTimeLeft != null ? `${c.champSelectStage} \u2013 ${formatClock(c.phaseTimeLeft)} left` : c.champSelectStage);
+      add(pingNote(st));
+      break;
+    case 'gameStart':
+    case 'inProgress':
+      add(c.queue);
+      add(pingNote(st));
+      break;
+    case 'reconnect':
+      add('Reconnect from the client \u2013 pings pick up where the game is');
+      break;
+    case 'postGame':
+      add('GG \u2013 waiting for your next game');
+      break;
+    default:
+      add('Queue up and it\u2019ll follow along.');
+  }
+  const out = [];
+  parts.forEach((p, i) => { if (i) out.push(' \u00b7 '); out.push(p); });
+  return out;
+}
+
 function renderStatus(st) {
   const header = $('status');
   header.dataset.state = st.state;
-  $('statusTitle').textContent = STATUS_TITLES[st.state] || 'Minimap Nudge';
+  header.dataset.phase = st.client ? st.client.phase : '';
+  $('statusTitle').textContent =
+    st.state === 'client' ? CLIENT_TITLES[st.client.phase] || 'League client open' : STATUS_TITLES[st.state] || 'Minimap Nudge';
   const sub = $('statusSub');
   sub.replaceChildren();
 
@@ -59,12 +129,14 @@ function renderStatus(st) {
     );
   } else if (st.state === 'ineligible') {
     sub.textContent = `${st.gameMode} isn't Summoner's Rift. Untick the option below to get pings everywhere.`;
+  } else if (st.state === 'client') {
+    sub.append(...clientSub(st));
   } else if (st.state === 'paused') {
-    sub.textContent = 'Flip the switch to turn reminders back on.';
+    sub.textContent = st.client ? `${st.line.replace(/^Alerts paused · /, '')} \u2013 flip the switch to turn reminders back on.` : 'Flip the switch to turn reminders back on.';
   } else if (st.state === 'ended') {
     sub.textContent = 'Waiting for the next match.';
   } else {
-    sub.textContent = 'Runs in the tray. Start a game and it’ll pick it up.';
+    sub.textContent = 'Runs in the tray. Open League and it\u2019ll show what you\u2019re doing here.';
   }
 }
 

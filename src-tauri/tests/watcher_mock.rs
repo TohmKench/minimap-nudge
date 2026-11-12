@@ -2,6 +2,7 @@
 //! (HTTPS with a self-signed cert, like the real one). The test controls the
 //! game clock step by step, so these are deterministic and fast.
 
+use minimap_nudge_lib::lcu::Lcu;
 use minimap_nudge_lib::league::LeagueClient;
 use minimap_nudge_lib::schedule::Phase;
 use minimap_nudge_lib::settings::Settings;
@@ -78,6 +79,13 @@ async fn start_mock(game: Arc<Mutex<Game>>) -> String {
     format!("https://127.0.0.1:{port}")
 }
 
+/// An LCU handle pointed at an empty folder: "client not running".
+fn no_client() -> Lcu {
+    let dir = std::env::temp_dir().join("mn-no-client");
+    let _ = std::fs::create_dir_all(&dir);
+    Lcu::new(Some(dir))
+}
+
 fn schedule() -> Settings {
     Settings {
         phases: vec![
@@ -97,12 +105,13 @@ fn watcher() -> Mutex<Watcher> {
 /// Steps the fake clock from `from` to `to` in 1 s increments, polling each step.
 async fn run(base: &str, game: &Arc<Mutex<Game>>, w: &Mutex<Watcher>, s: &Settings, from: f64, to: f64) -> (Vec<f64>, Vec<Event>) {
     let client = LeagueClient::new(base);
+    let lcu = no_client();
     let mut pings = vec![];
     let mut all = vec![];
     let mut t = from;
     while t <= to {
         game.lock().unwrap().time = t;
-        let (events, _) = poll_once(&client, w, s).await;
+        let (events, _) = poll_once(&client, &lcu, w, s).await;
         for e in events {
             if let Event::Ping { due, .. } = e {
                 pings.push(due);
@@ -119,7 +128,7 @@ async fn no_game_running_means_waiting() {
     // Nothing listening on this port.
     let client = LeagueClient::new("https://127.0.0.1:9");
     let w = watcher();
-    let (events, status) = poll_once(&client, &w, &schedule()).await;
+    let (events, status) = poll_once(&client, &no_client(), &w, &schedule()).await;
     assert!(events.is_empty());
     assert_eq!(status.state, State::Waiting);
 }
@@ -147,7 +156,7 @@ async fn joining_mid_game_has_no_backlog_and_closing_resets() {
 
     game.lock().unwrap().up = false;
     let client = LeagueClient::new(&base);
-    let (events, status) = poll_once(&client, &w, &s).await;
+    let (events, status) = poll_once(&client, &no_client(), &w, &s).await;
     assert_eq!(events, vec![Event::GameClosed]);
     assert_eq!(status.state, State::Waiting);
 }
