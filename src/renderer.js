@@ -154,7 +154,28 @@ function readPhasesFromDom() {
   });
 }
 
+// Every number box holds something usable (not mid-edit like "" or "-").
+function phaseFieldsValid() {
+  return [...document.querySelectorAll('#phases input[type="number"]:not(:disabled)')].every((inp) => {
+    const n = Number(inp.value);
+    return inp.value.trim() !== '' && Number.isFinite(n) && (inp.classList.contains('start') ? n >= 0 : n > 0);
+  });
+}
+
+let saveTimer = null;
+
+// While typing / clicking the arrows: update the timeline + preview at once,
+// save shortly after the last keystroke.
+function onPhasesInput() {
+  if (!phaseFieldsValid()) return;
+  renderTimeline(Schedule.normalizePhases(readPhasesFromDom()));
+  clearTimeout(saveTimer);
+  saveTimer = setTimeout(() => save({ phases: readPhasesFromDom() }), 400);
+}
+
 function onPhasesChanged() {
+  clearTimeout(saveTimer);
+  if (!phaseFieldsValid()) return; // left empty: focusout restores the saved value
   save({ phases: readPhasesFromDom() });
 }
 
@@ -167,7 +188,7 @@ function phaseRow(phase, i, total) {
       ? el('span', { class: 'lbl' }, 'From the start')
       : el('span', {},
           el('span', { class: 'lbl' }, 'From '),
-          el('input', { type: 'number', class: 'start', min: '1', step: '1', value: String(phase.startMin), onchange: onPhasesChanged }),
+          el('input', { type: 'number', class: 'start', min: '1', step: '1', value: String(phase.startMin), oninput: onPhasesInput, onchange: onPhasesChanged }),
           el('span', { class: 'lbl' }, ' min'));
 
   const every = el('span', { class: 'every' },
@@ -175,6 +196,7 @@ function phaseRow(phase, i, total) {
     el('input', {
       type: 'number', class: 'every-input', min: '0.25', step: '0.25',
       value: minutesText(lastInterval), disabled: silent, title: 'Minutes between pings (0.5 = 30 seconds)',
+      oninput: onPhasesInput,
       onchange: onPhasesChanged,
     }),
     el('span', { class: 'lbl' }, ' min'));
@@ -195,11 +217,19 @@ function phaseRow(phase, i, total) {
 
 function renderSchedule(phases) {
   const box = $('phases');
-  // Don't clobber a field the user is typing in.
-  if (box.contains(document.activeElement) && document.activeElement.type === 'number') return;
-  box.replaceChildren(...phases.map((p, i) => phaseRow(p, i, phases.length)));
+  // Don't rebuild the rows under a field the user is typing in (the timeline
+  // still updates); they're rebuilt when focus leaves the schedule.
+  const typing = box.contains(document.activeElement) && document.activeElement.type === 'number';
+  if (!typing) box.replaceChildren(...phases.map((p, i) => phaseRow(p, i, phases.length)));
   renderTimeline(phases);
 }
+
+// Leaving the schedule: re-sort rows and restore anything left empty.
+$('phases').addEventListener('focusout', () => {
+  setTimeout(() => {
+    if (state && !$('phases').contains(document.activeElement)) renderSchedule(state.settings.phases);
+  }, 0);
+});
 
 function renderTimeline(phases) {
   const pct = (t) => `${(t / TIMELINE_SEC) * 100}%`;
