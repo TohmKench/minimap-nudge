@@ -31,6 +31,7 @@ Settings, uploaded sounds and the log are stored in `%APPDATA%\com.thomas.minima
   - The shortest interval is 15 s.
   - If you join partway through a game, it picks up at the next ping without playing the ones you missed.
   - It goes quiet on the end-of-game screen.
+- **Role schedules:** give Top, Jungle, Mid, Bot or Support its own schedule; a role without one uses the default. With **Auto**, your role is picked up in champion select (blind pick and ARAM have none, so the default is used). You can also fix the role in Settings or the tray's **Role** menu.
 - **Sounds:**
   - 5 built-in sounds, plus uploads in mp3, wav, ogg, flac or m4a format (max 10 MB, the first 30 s are used).
   - Uploads are checked when you add them, and a file that can't be decoded is rejected.

@@ -6,7 +6,7 @@
 use crate::lcu::{ClientInfo, Lcu, Phase as ClientPhase};
 use crate::league::{GameStats, LeagueClient};
 use crate::schedule::{format_clock, next_alert_after};
-use crate::settings::Settings;
+use crate::settings::{role_name, Settings, ROLE_AUTO};
 use serde::Serialize;
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
@@ -40,6 +40,12 @@ pub struct Status {
     pub next_alert: Option<f64>,
     pub line: String,
     pub client: Option<ClientInfo>,
+    /// Role whose schedule is in use (`None` = default schedule).
+    pub role: Option<String>,
+    /// "auto" (from champ select) or "manual" (picked in settings/tray); `None` when no role.
+    pub role_source: Option<&'static str>,
+    /// True when the active role has its own customised schedule.
+    pub role_schedule: bool,
     /// Whether pings will play for the upcoming/current game (false = mode isn't Summoner's Rift and SR-only is on).
     pub will_ping: bool,
 }
@@ -66,6 +72,8 @@ pub struct Watcher {
     last_end_check: Option<Instant>,
     pub end_check_interval: Duration,
     client: Option<ClientInfo>,
+    /// Position from the last champ select; kept through the game, cleared back in the lobby.
+    detected_role: Option<String>,
 }
 
 impl Default for Watcher {
@@ -80,6 +88,7 @@ impl Default for Watcher {
             last_end_check: None,
             end_check_interval: END_CHECK_INTERVAL,
             client: None,
+            detected_role: None,
         }
     }
 }
@@ -90,7 +99,12 @@ impl Watcher {
     }
 
     fn reset(&mut self) {
-        *self = Self { end_check_interval: self.end_check_interval, client: self.client.take(), ..Self::default() };
+        *self = Self {
+            end_check_interval: self.end_check_interval,
+            client: self.client.take(),
+            detected_role: self.detected_role.take(),
+            ..Self::default()
+        };
     }
 
     /// Latest League client state (`None` = client not running). Returns an event when the phase changes.
@@ -98,12 +112,42 @@ impl Watcher {
         let old = self.client.as_ref().map(|c| c.phase.clone());
         let new = info.as_ref().map(|c| c.phase.clone());
         let queue = info.as_ref().and_then(|c| c.queue.clone());
+        match info.as_ref().map(|c| &c.phase) {
+            Some(ClientPhase::ChampSelect) => {
+                if let Some(p) = info.as_ref().and_then(|c| c.assigned_position.clone()) {
+                    self.detected_role = Some(p);
+                }
+            }
+            // A new lobby/queue means the last game's role no longer applies.
+            Some(ClientPhase::Lobby | ClientPhase::Matchmaking | ClientPhase::None) => self.detected_role = None,
+            _ => {}
+        }
         self.client = info;
         (old != new).then_some(Event::ClientPhase { phase: new, queue })
     }
 
     pub fn in_game(&self) -> bool {
         self.in_game
+    }
+
+    /// Role whose schedule applies right now, and where it came from.
+    pub fn active_role(&self, s: &Settings) -> (Option<String>, Option<&'static str>) {
+        if s.role_mode != ROLE_AUTO && role_name(&s.role_mode).is_some() {
+            (Some(s.role_mode.clone()), Some("manual"))
+        } else {
+            match &self.detected_role {
+                Some(r) => (Some(r.clone()), Some("auto")),
+                None => (None, None),
+            }
+        }
+    }
+
+    /// `s` with `phases` swapped for the active role's schedule.
+    pub fn effective(&self, s: &Settings) -> Settings {
+        let (role, _) = self.active_role(s);
+        let mut e = s.clone();
+        e.phases = s.phases_for(role.as_deref()).to_vec();
+        e
     }
 
     fn will_ping(&self, s: &Settings) -> bool {
@@ -128,7 +172,8 @@ impl Watcher {
     /// Recompute the next ping after a schedule change.
     pub fn recompute(&mut self, s: &Settings) {
         if let (true, Some(t)) = (self.in_game, self.game_time) {
-            self.next_alert = next_alert_after(&s.phases, t);
+            let (role, _) = self.active_role(s);
+            self.next_alert = next_alert_after(s.phases_for(role.as_deref()), t);
         }
     }
 
@@ -181,6 +226,7 @@ impl Watcher {
     }
 
     pub fn status(&self, s: &Settings) -> Status {
+        let (role, role_source) = self.active_role(s);
         let state = if self.in_game {
             if self.ended {
                 State::Ended
@@ -226,6 +272,9 @@ impl Watcher {
             next_alert: self.next_alert,
             line,
             client: if self.in_game { None } else { self.client.clone() },
+            role_schedule: role.as_deref().is_some_and(|r| s.role_schedules.contains_key(r)),
+            role,
+            role_source,
             will_ping: self.will_ping(s),
         }
     }
@@ -277,7 +326,8 @@ pub async fn poll_once(
     // The client's state only matters outside a game; skip those calls while playing.
     let client_info = if stats.is_none() { Some(lcu.snapshot().await) } else { None };
     let mut w = watcher.lock().unwrap();
-    let mut events = w.apply(stats, ended, settings, now);
+    let effective = w.effective(settings);
+    let mut events = w.apply(stats, ended, &effective, now);
     if let Some(info) = client_info {
         events.extend(w.set_client(info));
     }
@@ -362,7 +412,56 @@ mod tests {
             est_queue_time: Some(120.0),
             champ_select_stage: None,
             phase_time_left: None,
+            assigned_position: None,
         })
+    }
+
+    fn champ_select_as(role: &str) -> Option<ClientInfo> {
+        let mut c = client(ClientPhase::ChampSelect, Some(11)).unwrap();
+        c.assigned_position = Some(role.into());
+        Some(c)
+    }
+
+    #[test]
+    fn role_from_champ_select_picks_schedule() {
+        let mut s = settings(); // default: 3 min, 1 min from 10:00
+        s.role_schedules.insert("jungle".into(), vec![Phase { start_min: 0.0, interval_sec: Some(60.0) }]);
+        let mut w = Watcher::new();
+        let now = Instant::now();
+
+        w.set_client(champ_select_as("jungle"));
+        let st = w.status(&s);
+        assert_eq!((st.role.as_deref(), st.role_source, st.role_schedule), (Some("jungle"), Some("auto"), true));
+
+        // game starts: next ping comes from the jungle schedule (1:00), not the default (3:00)
+        let eff = w.effective(&s);
+        w.apply(sr(10.0), None, &eff, now);
+        assert_eq!(w.status(&s).next_alert, Some(60.0));
+
+        // a role without its own schedule uses the default
+        let mut w = Watcher::new();
+        w.set_client(champ_select_as("top"));
+        let st = w.status(&s);
+        assert_eq!((st.role.as_deref(), st.role_schedule), (Some("top"), false));
+        let eff = w.effective(&s);
+        w.apply(sr(10.0), None, &eff, now);
+        assert_eq!(w.status(&s).next_alert, Some(180.0));
+
+        // back to the lobby: detected role cleared
+        w.apply(None, None, &s, now);
+        w.set_client(client(ClientPhase::Lobby, Some(11)));
+        assert_eq!(w.status(&s).role, None);
+
+        // manual role wins over detection, and recompute follows a mid-game change
+        let mut w = Watcher::new();
+        w.set_client(champ_select_as("top"));
+        let eff = w.effective(&s);
+        w.apply(sr(200.0), None, &eff, now);
+        assert_eq!(w.status(&s).next_alert, Some(360.0));
+        s.role_mode = "jungle".into();
+        w.recompute(&s);
+        let st = w.status(&s);
+        assert_eq!((st.role.as_deref(), st.role_source, st.next_alert), (Some("jungle"), Some("manual"), Some(240.0)));
     }
 
     #[test]

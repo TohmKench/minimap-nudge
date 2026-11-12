@@ -45,6 +45,8 @@ Check a release: `curl -sL https://github.com/TohmKench/minimap-nudge/releases/l
 - Pushing needs GitHub credentials on the machine (`gh auth login`, or an SSH key added to TohmKench).
 
 ## Behaviour to preserve
+- Role profiles: `roleSchedules` (per role id: top/jungle/middle/bottom/utility) override the default `phases`. `roleMode` is "auto" (role from champ select's assignedPosition, kept through the game and cleared back in lobby) or a fixed role. `Watcher::effective()` swaps in the active role's schedule; always schedule through it.
+- Never add enemy summoner spell, ultimate or cooldown tracking/timers (manual or automatic). Riot's third-party policy prohibits it and it puts the user's account at risk.
 - Outside a game the header/tray show the client phase (lobby, queue + timer, ready check, champ select + timer, loading, post-game). In-game state always wins over client state. LCU is polled only while not in a game.
 - Pings follow the in-game clock. No backlog when joining mid-game; a ping more than 10 s late is skipped; quiet after GameEnd; "Summoner's Rift only" means mapNumber 11.
 - Never auto-install updates; installing only happens when the user clicks.

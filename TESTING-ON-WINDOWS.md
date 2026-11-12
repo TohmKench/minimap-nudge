@@ -23,6 +23,8 @@ The schedule logic, sound decoding and game detection were tested on Linux and a
 
 With League open, the settings header should follow along: **League client open → In lobby → In queue (with a timer) → Match found! → Champion select → Loading into game**. The tray icon turns dim teal while the client is open. If it stays on "Waiting for League" while the client is open, check the log for `client:` lines and send it to me; game detection still works either way.
 
+**Role schedules:** in Settings, open the **Jungle** tab (or your main role), click **Customise for Jungle** and set something easy to notice, like every 1 min. Play a draft or ranked game as that role. Champ select should show "Jungle schedule, first ping at 1:00", the first ping should come at 1:00, and the log's `game detected` line names the schedule it used.
+
 ## 4. A real game
 
 1. Leave the app in the tray and play a normal Summoner's Rift game, or a Practice Tool session (it uses the same API).

@@ -192,3 +192,29 @@ button:disabled { opacity: .5; cursor: default; }
 .progress { height: 6px; margin-top: 8px; background: var(--panel); border: 1px solid var(--line); border-radius: 4px; overflow: hidden; }
 .progress span { display: block; height: 100%; width: 0; background: var(--accent); transition: width .2s; }
 .notes { color: var(--muted); font-size: 13px; margin: 8px 0 0; white-space: pre-wrap; -webkit-user-select: text; user-select: text; }
+
+/* ---------------- role schedules */
+.tabs { display: flex; gap: 4px; flex-wrap: wrap; margin: 4px 0 10px; }
+.tab {
+  background: transparent; border: 1px solid var(--line); color: var(--muted);
+  padding: 4px 10px; border-radius: 999px; font-size: 13px; position: relative;
+}
+.tab:hover { background: #1a252e; color: var(--text); }
+.tab[aria-selected="true"] { background: var(--accent-dim); border-color: var(--accent-dim); color: var(--text); }
+.tab .dot { display: inline-block; width: 6px; height: 6px; border-radius: 50%; background: var(--accent); margin-left: 6px; vertical-align: middle; }
+.tab .live { font-size: 10px; text-transform: uppercase; letter-spacing: .05em; color: var(--accent); margin-left: 6px; }
+.tab[aria-selected="true"] .live { color: #bff3e8; }
+.role-note {
+  display: flex; align-items: center; justify-content: space-between; gap: 10px;
+  background: var(--panel); border: 1px dashed var(--line); border-radius: var(--radius);
+  padding: 9px 12px; margin-bottom: 8px; color: var(--muted); font-size: 13px;
+}
+/* `hidden` must win over the display rules above */
+.role-note[hidden], #phases[hidden], .update [hidden] { display: none; }
+.role-mode { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-top: 14px; color: var(--muted); }
+select {
+  font: inherit; color: var(--text); background: var(--bg);
+  border: 1px solid var(--line); border-radius: 6px; padding: 4px 8px;
+}
+.role-active { color: var(--muted); font-size: 13px; margin: 6px 0 0; }
+.role-active b { color: var(--text); font-weight: 600; }

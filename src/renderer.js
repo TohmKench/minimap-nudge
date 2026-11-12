@@ -54,15 +54,87 @@ const CLIENT_TITLES = {
   postGame: 'Post-game',
 };
 
+// ------------------------------------------------------------ role schedules
+
+let editRole = 'default'; // which schedule the editor shows
+
+const roleName = (id) => (state.roles || []).find((r) => r.id === id)?.name || id;
+const roleSchedules = () => state.settings.roleSchedules || {};
+// What will actually run for a role (its own schedule, else the default).
+const phasesForRole = (role) => (role && roleSchedules()[role]) || state.settings.phases;
+// What the editor is editing: the default, or the selected role's own schedule (null = none yet).
+const editedPhases = () => (editRole === 'default' ? state.settings.phases : roleSchedules()[editRole] || null);
+
+function savePhases(phases) {
+  if (editRole === 'default') return save({ phases });
+  return save({ roleSchedules: { ...roleSchedules(), [editRole]: phases } });
+}
+
+function renderRoleTabs() {
+  const active = state.status && state.status.role;
+  const tabs = [{ id: 'default', name: 'Default' }, ...(state.roles || [])];
+  $('roleTabs').replaceChildren(...tabs.map((t) =>
+    el('button', {
+      class: 'tab', role: 'tab', 'aria-selected': String(t.id === editRole),
+      title: t.id === 'default' ? 'Used for any role without its own schedule' : `Schedule for ${t.name}`,
+      onclick: () => { editRole = t.id; renderSchedule(); },
+    },
+    t.name,
+    t.id !== 'default' && roleSchedules()[t.id] ? el('span', { class: 'dot', title: 'Has its own schedule' }) : null,
+    (t.id === active || (t.id === 'default' && !(active && roleSchedules()[active]))) ? el('span', { class: 'live' }, 'in use') : null)));
+
+  const note = $('roleNote');
+  note.replaceChildren();
+  if (editRole === 'default') {
+    note.hidden = true;
+  } else if (!roleSchedules()[editRole]) {
+    note.hidden = false;
+    note.append(
+      el('span', {}, `${roleName(editRole)} uses your default schedule.`),
+      el('button', { class: 'ghost', onclick: () => savePhases(state.settings.phases.map((p) => ({ ...p }))) },
+        `Customise for ${roleName(editRole)}`));
+  } else {
+    note.hidden = false;
+    note.append(
+      el('span', {}, `${roleName(editRole)} has its own schedule.`),
+      el('button', { class: 'ghost', onclick: () => {
+        const rest = { ...roleSchedules() };
+        delete rest[editRole];
+        save({ roleSchedules: rest });
+      } }, 'Use default instead'));
+  }
+}
+
+function renderRoleMode() {
+  const sel = $('roleMode');
+  const opts = [{ id: 'auto', name: 'Auto – role from champ select' }, ...(state.roles || []).map((r) => ({ id: r.id, name: `Always ${r.name}` }))];
+  sel.replaceChildren(...opts.map((o) => el('option', { value: o.id, selected: o.id === state.settings.roleMode }, o.name)));
+}
+
+function renderRoleActive(st) {
+  const box = $('roleActive');
+  box.replaceChildren();
+  if (!st) return;
+  if (st.role) {
+    const how = st.roleSource === 'manual' ? 'set by you' : 'from champ select';
+    box.append('Right now: ', el('b', {}, roleName(st.role)), ` (${how}) – `,
+      st.roleSchedule ? 'using its own schedule.' : 'using the default schedule.');
+  } else if (state.settings.roleMode === 'auto') {
+    box.textContent = 'Right now: default schedule. Your role is picked up in champ select (blind pick and ARAM have none).';
+  }
+}
+
+$('roleMode').addEventListener('change', (e) => save({ roleMode: e.target.value }));
+
 function firstPing() {
-  const phases = state && state.settings ? state.settings.phases : [];
+  const phases = state && state.settings ? phasesForRole(state.status && state.status.role) : [];
   return formatClock(Schedule.nextAlertAfter(phases, 0));
 }
 
 function pingNote(st) {
-  return st.willPing
-    ? el('span', {}, 'first ping at ', el('span', { class: 'mono' }, firstPing()))
-    : 'this mode stays quiet (Summoner\u2019s Rift only)';
+  if (!st.willPing) return 'this mode stays quiet (Summoner\u2019s Rift only)';
+  const which = st.role && st.roleSchedule ? `${roleName(st.role)} schedule, ` : '';
+  return el('span', {}, `${which}first ping at `, el('span', { class: 'mono' }, firstPing()));
 }
 
 function clientSub(st) {
@@ -170,13 +242,13 @@ function onPhasesInput() {
   if (!phaseFieldsValid()) return;
   renderTimeline(Schedule.normalizePhases(readPhasesFromDom()));
   clearTimeout(saveTimer);
-  saveTimer = setTimeout(() => save({ phases: readPhasesFromDom() }), 400);
+  saveTimer = setTimeout(() => savePhases(readPhasesFromDom()), 400);
 }
 
 function onPhasesChanged() {
   clearTimeout(saveTimer);
   if (!phaseFieldsValid()) return; // left empty: focusout restores the saved value
-  save({ phases: readPhasesFromDom() });
+  savePhases(readPhasesFromDom());
 }
 
 function phaseRow(phase, i, total) {
@@ -209,25 +281,31 @@ function phaseRow(phase, i, total) {
     : el('button', { class: 'icon', title: 'Remove', 'aria-label': 'Remove this change', onclick: () => {
         const phases = readPhasesFromDom();
         phases.splice(i, 1);
-        save({ phases });
+        savePhases(phases);
       } }, '✕');
 
   return el('div', { class: `phase${silent ? ' is-silent' : ''}` }, startCell, every, el('span'), silentBox, remove);
 }
 
-function renderSchedule(phases) {
+function renderSchedule() {
+  renderRoleTabs();
   const box = $('phases');
+  const own = editedPhases();
+  // A role without its own schedule: no editor, timeline shows the default it'll use.
+  box.hidden = own === null;
+  $('addPhase').disabled = own === null;
+  const phases = own || state.settings.phases;
   // Don't rebuild the rows under a field the user is typing in (the timeline
   // still updates); they're rebuilt when focus leaves the schedule.
   const typing = box.contains(document.activeElement) && document.activeElement.type === 'number';
-  if (!typing) box.replaceChildren(...phases.map((p, i) => phaseRow(p, i, phases.length)));
+  if (!typing && own) box.replaceChildren(...phases.map((p, i) => phaseRow(p, i, phases.length)));
   renderTimeline(phases);
 }
 
 // Leaving the schedule: re-sort rows and restore anything left empty.
 $('phases').addEventListener('focusout', () => {
   setTimeout(() => {
-    if (state && !$('phases').contains(document.activeElement)) renderSchedule(state.settings.phases);
+    if (state && !$('phases').contains(document.activeElement)) renderSchedule();
   }, 0);
 });
 
@@ -263,7 +341,7 @@ $('addPhase').addEventListener('click', () => {
   const phases = readPhasesFromDom();
   const last = phases[phases.length - 1];
   phases.push({ startMin: last.startMin + 10, intervalSec: last.intervalSec ?? 60 });
-  save({ phases });
+  savePhases(phases);
 });
 
 // ------------------------------------------------------------ sounds
@@ -373,13 +451,26 @@ function render() {
   $('startup').checked = s.launchAtStartup;
   volume.value = Math.round(s.volume * 100);
   $('volumeVal').textContent = `${volume.value}%`;
-  renderSchedule(s.phases);
+  renderSchedule();
+  renderRoleMode();
   renderSounds();
   if (state.status) renderStatus(state.status);
+  renderRoleActive(state.status);
   renderUpdate(state.update);
 }
 
-api.onStatus((st) => { if (state) { state.status = st; renderStatus(st); } });
+let lastRoleKey = '';
+api.onStatus((st) => {
+  if (!state) return;
+  state.status = st;
+  renderStatus(st);
+  const key = `${st.role}|${st.roleSource}|${st.roleSchedule}`;
+  if (key !== lastRoleKey) {
+    lastRoleKey = key;
+    renderRoleActive(st);
+    renderRoleTabs();
+  }
+});
 api.onSettings((settings) => { if (state) { state.settings = settings; render(); } });
 
 api.getState().then((s) => { state = s; render(); });

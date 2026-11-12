@@ -10,7 +10,7 @@
  *   npm run mock-game -- --end-after 120       # send GameEnd after 120 real seconds
  *
  * Client + game (also fakes the League client: lobby -> queue -> champ select -> game):
- *   npm run mock-game -- --client --league-dir C:\temp\fake-league
+ *   npm run mock-game -- --client --league-dir C:\temp\fake-league [--position top]
  *   then start the app with MINIMAP_NUDGE_LEAGUE_DIR=C:\temp\fake-league
  *   (the real client must be closed; it uses the same lockfile idea)
  *
@@ -35,6 +35,7 @@ const MODE = arg('mode', 'CLASSIC');
 const END_AFTER = Number(arg('end-after', 0));
 const PORT = Number(arg('port', 2999));
 const LEAGUE_DIR = arg('league-dir', path.join(os.tmpdir(), 'mock-league'));
+const POSITION = arg('position', 'jungle'); // your assigned role in champ select (top/jungle/middle/bottom/utility, or "" for blind)
 const MAPS = { CLASSIC: 11, ARAM: 12, CHERRY: 30 };
 const QUEUES = { CLASSIC: 420, ARAM: 450, CHERRY: 1700 };
 
@@ -106,7 +107,11 @@ if (CLIENT) {
       case '/lol-matchmaking/v1/search': return json(res, 200, { searchState: 'Searching', timeInQueue: elapsed() - phaseStart(), estimatedQueueTime: 95 });
       case '/lol-champ-select/v1/session': {
         const left = Math.max(0, 30 - (elapsed() - phaseStart()) * 2) * 1000;
-        return json(res, 200, { timer: { adjustedTimeLeftInPhase: left, phase: 'BAN_PICK', isInfinite: false } });
+        return json(res, 200, {
+          timer: { adjustedTimeLeftInPhase: left, phase: 'BAN_PICK', isInfinite: false },
+          localPlayerCellId: 2,
+          myTeam: [{ cellId: 0, assignedPosition: 'top' }, { cellId: 2, assignedPosition: POSITION }, { cellId: 4, assignedPosition: 'utility' }],
+        });
       }
       default: return json(res, 404, {});
     }

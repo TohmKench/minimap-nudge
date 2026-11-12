@@ -2,6 +2,7 @@
 
 use crate::schedule::{normalize, Phase};
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
@@ -22,6 +23,22 @@ pub const BUILTIN_SOUNDS: &[BuiltinSound] = &[
 
 pub const DEFAULT_SOUND: &str = "builtin:chime";
 
+/// League's position ids (as the client reports them in champ select) and display names.
+pub const ROLES: &[(&str, &str)] = &[
+    ("top", "Top"),
+    ("jungle", "Jungle"),
+    ("middle", "Mid"),
+    ("bottom", "Bot"),
+    ("utility", "Support"),
+];
+
+pub fn role_name(id: &str) -> Option<&'static str> {
+    ROLES.iter().find(|(k, _)| *k == id).map(|(_, n)| *n)
+}
+
+/// "auto" = use the role assigned in champ select; otherwise a fixed role id.
+pub const ROLE_AUTO: &str = "auto";
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct CustomSound {
     pub id: String,
@@ -39,6 +56,10 @@ pub struct Settings {
     pub custom_sounds: Vec<CustomSound>,
     pub summoners_rift_only: bool,
     pub launch_at_startup: bool,
+    /// Custom schedules per role; a role without an entry uses `phases`.
+    pub role_schedules: BTreeMap<String, Vec<Phase>>,
+    /// `"auto"` or a role id from `ROLES`.
+    pub role_mode: String,
 }
 
 impl Default for Settings {
@@ -51,6 +72,8 @@ impl Default for Settings {
             custom_sounds: vec![],
             summoners_rift_only: true,
             launch_at_startup: false,
+            role_schedules: BTreeMap::new(),
+            role_mode: ROLE_AUTO.into(),
         }
     }
 }
@@ -58,6 +81,14 @@ impl Default for Settings {
 impl Settings {
     pub fn sanitized(mut self) -> Self {
         self.phases = normalize(&self.phases);
+        self.role_schedules = std::mem::take(&mut self.role_schedules)
+            .into_iter()
+            .filter(|(k, _)| role_name(k).is_some())
+            .map(|(k, v)| (k, normalize(&v)))
+            .collect();
+        if self.role_mode != ROLE_AUTO && role_name(&self.role_mode).is_none() {
+            self.role_mode = ROLE_AUTO.into();
+        }
         self.custom_sounds.retain(|c| !c.id.is_empty() && c.file.is_file());
         let known = BUILTIN_SOUNDS.iter().any(|b| b.id == self.sound_id)
             || self.custom_sounds.iter().any(|c| c.id == self.sound_id);
@@ -66,6 +97,11 @@ impl Settings {
         }
         self.volume = if self.volume.is_finite() { self.volume.clamp(0.0, 1.0) } else { 0.8 };
         self
+    }
+
+    /// The schedule to use for `role` (its own if customised, else the default).
+    pub fn phases_for(&self, role: Option<&str>) -> &[Phase] {
+        role.and_then(|r| self.role_schedules.get(r)).map(Vec::as_slice).unwrap_or(&self.phases)
     }
 
     /// Shallow-merge a JSON patch (like `{...settings, ...patch}` in JS).
@@ -147,6 +183,25 @@ mod tests {
         let reopened = SettingsStore::open(dir.path()).unwrap();
         assert!(reopened.get().custom_sounds.is_empty());
         assert_eq!(reopened.get().sound_id, DEFAULT_SOUND);
+    }
+
+    #[test]
+    fn role_schedules_sanitized() {
+        let s = Settings::default().patched(&json!({
+            "roleSchedules": {
+                "jungle": [{"startMin": 0, "intervalSec": 60}],
+                "utility": [{"startMin": 5, "intervalSec": 5}],
+                "fill": [{"startMin": 0, "intervalSec": 60}]
+            },
+            "roleMode": "carry"
+        }));
+        assert_eq!(s.role_schedules.keys().collect::<Vec<_>>(), vec!["jungle", "utility"], "unknown role dropped");
+        assert_eq!(s.role_schedules["utility"][0].start_min, 0.0, "normalized: phase at 0 added");
+        assert_eq!(s.role_schedules["utility"][1].interval_sec, Some(15.0), "clamped");
+        assert_eq!(s.role_mode, ROLE_AUTO, "bad role mode falls back to auto");
+        assert_eq!(s.phases_for(Some("jungle"))[0].interval_sec, Some(60.0));
+        assert_eq!(s.phases_for(Some("top")), s.phases.as_slice(), "uncustomised role uses default");
+        assert_eq!(s.phases_for(None), s.phases.as_slice());
     }
 
     #[test]

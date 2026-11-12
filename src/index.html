@@ -26,11 +26,18 @@
         <h2>Reminder schedule</h2>
         <button class="ghost" id="addPhase">+ Add change</button>
       </div>
-      <p class="hint">Change how often you're nudged as the game goes on. Each change takes effect at its start minute.</p>
+      <p class="hint">Change how often you're nudged as the game goes on. Each change takes effect at its start minute. Give a role its own schedule and it's used automatically when you're assigned that role in champ select.</p>
+      <div class="tabs" id="roleTabs" role="tablist" aria-label="Schedule for"></div>
+      <div class="role-note" id="roleNote" hidden></div>
       <div id="phases"></div>
       <div class="timeline" id="timeline" aria-label="Preview of pings over the first 40 minutes"></div>
       <div class="timeline-scale"><span>0:00</span><span>10:00</span><span>20:00</span><span>30:00</span><span>40:00</span></div>
       <p class="preview" id="preview"></p>
+      <div class="role-mode">
+        <label for="roleMode">Which schedule to use</label>
+        <select id="roleMode"></select>
+      </div>
+      <p class="role-active" id="roleActive"></p>
     </section>
 
     <section>

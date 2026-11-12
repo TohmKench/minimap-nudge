@@ -12,11 +12,11 @@ use league::LeagueClient;
 use logger::log;
 use schedule::format_clock;
 use serde::Serialize;
-use settings::{CustomSound, Settings, SettingsStore, BUILTIN_SOUNDS, DEFAULT_SOUND};
+use settings::{role_name, CustomSound, Settings, SettingsStore, BUILTIN_SOUNDS, DEFAULT_SOUND, ROLES, ROLE_AUTO};
 use std::path::PathBuf;
 use std::sync::Mutex;
 use tauri::image::Image;
-use tauri::menu::{CheckMenuItem, Menu, MenuItem, PredefinedMenuItem};
+use tauri::menu::{CheckMenuItem, Menu, MenuItem, PredefinedMenuItem, Submenu};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIcon, TrayIconBuilder, TrayIconEvent};
 use tauri::{AppHandle, Emitter, Manager, RunEvent, WebviewUrl, WebviewWindowBuilder, Wry};
 use updates::{Phase as UpdatePhase, UpdateStatus, Updates};
@@ -31,6 +31,8 @@ struct TrayUi {
     status_item: MenuItem<Wry>,
     enabled_item: CheckMenuItem<Wry>,
     update_item: MenuItem<Wry>,
+    role_menu: Submenu<Wry>,
+    role_items: Vec<(String, CheckMenuItem<Wry>)>,
     last_key: String,
     icon_kind: Option<IconKind>,
 }
@@ -60,8 +62,16 @@ struct SoundInfo {
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
+struct RoleInfo {
+    id: &'static str,
+    name: &'static str,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
 struct PublicState {
     settings: Settings,
+    roles: Vec<RoleInfo>,
     sounds: Vec<SoundInfo>,
     status: Status,
     update: UpdateStatus,
@@ -88,7 +98,8 @@ fn public_state(app: &AppHandle, error: Option<String>) -> PublicState {
         .collect();
     sounds.extend(settings.custom_sounds.iter().map(|c| SoundInfo { id: c.id.clone(), name: c.name.clone(), builtin: false }));
     let update = app.state::<Updates>().status();
-    PublicState { status: current_status(app), settings, sounds, update, error }
+    let roles = ROLES.iter().map(|(id, name)| RoleInfo { id, name }).collect();
+    PublicState { status: current_status(app), settings, roles, sounds, update, error }
 }
 
 fn sound_source(settings: &Settings, id: Option<&str>) -> SoundSource {
@@ -133,7 +144,7 @@ fn apply_settings(app: &AppHandle, patch: &serde_json::Value) -> Result<(), Stri
     if before.launch_at_startup != after.launch_at_startup {
         sync_autostart(app, after.launch_at_startup);
     }
-    state.watcher.lock().unwrap().recompute(&after);
+    state.watcher.lock().unwrap().recompute(&after); // uses the active role's schedule
     refresh_tray(app, &current_status(app));
     if app.get_webview_window(WINDOW).is_some() {
         let _ = app.emit_to(WINDOW, "settings", &after);
@@ -188,12 +199,17 @@ fn coarse_line(st: &Status) -> String {
 }
 
 fn refresh_tray(app: &AppHandle, st: &Status) {
-    let enabled = current_settings(app).enabled;
+    let settings = current_settings(app);
+    let enabled = settings.enabled;
     let state = app.state::<AppState>();
     let mut guard = state.tray.lock().unwrap();
     let Some(ui) = guard.as_mut() else { return };
 
-    let tip: String = format!("Minimap Nudge — {}", st.line).chars().take(127).collect();
+    let role_note = match (st.role.as_deref().and_then(role_name), st.role_schedule) {
+        (Some(r), true) => format!(" · {r} schedule"),
+        _ => String::new(),
+    };
+    let tip: String = format!("Minimap Nudge — {}{role_note}", st.line).chars().take(127).collect();
     let _ = ui.tray.set_tooltip(Some(&tip));
 
     let kind = match st.state {
@@ -207,10 +223,19 @@ fn refresh_tray(app: &AppHandle, st: &Status) {
     }
 
     let coarse = coarse_line(st);
-    let key = format!("{coarse}|{enabled}");
+    let role_label = match (st.role.as_deref().and_then(role_name), st.role_source) {
+        (Some(r), Some("manual")) => format!("Role: {r}"),
+        (Some(r), _) => format!("Role: Auto ({r})"),
+        _ => "Role: Auto".to_string(),
+    };
+    let key = format!("{coarse}|{enabled}|{}|{role_label}", settings.role_mode);
     if key != ui.last_key {
         let _ = ui.status_item.set_text(&coarse);
         let _ = ui.enabled_item.set_checked(enabled);
+        let _ = ui.role_menu.set_text(&role_label);
+        for (mode, item) in &ui.role_items {
+            let _ = item.set_checked(*mode == settings.role_mode);
+        }
         ui.last_key = key;
     }
 }
@@ -220,6 +245,20 @@ fn build_tray(app: &AppHandle) -> tauri::Result<TrayUi> {
     let status_item = MenuItem::with_id(app, "status", "Waiting for League", false, None::<&str>)?;
     let enabled_item = CheckMenuItem::with_id(app, "enabled", "Alerts enabled", true, enabled, None::<&str>)?;
     let update_item = MenuItem::with_id(app, "update", "Check for updates", true, None::<&str>)?;
+    let role_mode = current_settings(app).role_mode;
+    let mut role_items = vec![(
+        ROLE_AUTO.to_string(),
+        CheckMenuItem::with_id(app, "role:auto", "Auto (from champ select)", true, role_mode == ROLE_AUTO, None::<&str>)?,
+    )];
+    for (id, name) in ROLES {
+        role_items.push((
+            id.to_string(),
+            CheckMenuItem::with_id(app, format!("role:{id}"), *name, true, role_mode == *id, None::<&str>)?,
+        ));
+    }
+    let role_refs: Vec<&dyn tauri::menu::IsMenuItem<Wry>> =
+        role_items.iter().map(|(_, i)| i as &dyn tauri::menu::IsMenuItem<Wry>).collect();
+    let role_menu = Submenu::with_id_and_items(app, "role", "Role: Auto", true, &role_refs)?;
     let menu = Menu::with_items(
         app,
         &[
@@ -227,6 +266,7 @@ fn build_tray(app: &AppHandle) -> tauri::Result<TrayUi> {
             &PredefinedMenuItem::separator(app)?,
             &MenuItem::with_id(app, "settings", "Settings…", true, None::<&str>)?,
             &enabled_item,
+            &role_menu,
             &MenuItem::with_id(app, "test", "Test sound", true, None::<&str>)?,
             &MenuItem::with_id(app, "logs", "Open log folder", true, None::<&str>)?,
             &update_item,
@@ -241,6 +281,9 @@ fn build_tray(app: &AppHandle) -> tauri::Result<TrayUi> {
         .menu(&menu)
         .show_menu_on_left_click(false)
         .on_menu_event(|app, event| match event.id().as_ref() {
+            id if id.starts_with("role:") => {
+                let _ = apply_settings(app, &serde_json::json!({ "roleMode": &id[5..] }));
+            }
             "settings" => open_window(app),
             "enabled" => {
                 let state = app.state::<AppState>();
@@ -279,7 +322,16 @@ fn build_tray(app: &AppHandle) -> tauri::Result<TrayUi> {
         })
         .build(app)?;
 
-    Ok(TrayUi { tray, status_item, enabled_item, update_item, last_key: String::new(), icon_kind: Some(IconKind::Idle) })
+    Ok(TrayUi {
+        tray,
+        status_item,
+        enabled_item,
+        update_item,
+        role_menu,
+        role_items,
+        last_key: String::new(),
+        icon_kind: Some(IconKind::Idle),
+    })
 }
 
 /// Keeps the tray's update item in step with the updater.
@@ -398,7 +450,12 @@ fn spawn_watcher(app: AppHandle) {
             for ev in events {
                 match ev {
                     Event::GameDetected { game_time, mode } => {
-                        log(&format!("game detected: {mode} at {}", format_clock(Some(game_time))))
+                        let schedule = match (status.role.as_deref().and_then(role_name), status.role_schedule) {
+                            (Some(r), true) => format!("{r} schedule"),
+                            (Some(r), false) => format!("default schedule; role {r}"),
+                            _ => "default schedule".to_string(),
+                        };
+                        log(&format!("game detected: {mode} at {} ({schedule})", format_clock(Some(game_time))))
                     }
                     Event::Ping { game_time, due } => {
                         log(&format!("ping at {} (due {})", format_clock(Some(game_time)), format_clock(Some(due))));

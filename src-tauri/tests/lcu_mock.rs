@@ -61,7 +61,7 @@ async fn fake_client(state: Arc<Mutex<Fake>>) -> u16 {
             }
             "/lol-champ-select/v1/session" => (
                 200,
-                r#"{"timer":{"adjustedTimeLeftInPhase":24500,"phase":"BAN_PICK","isInfinite":false}}"#.into(),
+                r#"{"timer":{"adjustedTimeLeftInPhase":24500,"phase":"BAN_PICK","isInfinite":false},"localPlayerCellId":3,"myTeam":[{"cellId":1,"assignedPosition":"top"},{"cellId":3,"assignedPosition":"JUNGLE"},{"cellId":4,"assignedPosition":"utility"}]}"#.into(),
             ),
             _ => (404, "{}".into()),
         }
@@ -97,6 +97,7 @@ async fn walks_through_client_phases() {
     state.lock().unwrap().phase = "ChampSelect";
     let c = lcu.snapshot().await.unwrap();
     assert_eq!((c.phase, c.champ_select_stage.as_deref(), c.phase_time_left), (Phase::ChampSelect, Some("Picks & bans"), Some(24.5)));
+    assert_eq!(c.assigned_position.as_deref(), Some("jungle"), "my cell's position, lower-cased");
 
     {
         let mut s = state.lock().unwrap();

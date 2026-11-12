@@ -92,6 +92,8 @@ pub struct ClientInfo {
     /// "Banning", "Picking", "Finalizing", "Planning"
     pub champ_select_stage: Option<String>,
     pub phase_time_left: Option<f64>,
+    /// Your position in champ select: top / jungle / middle / bottom / utility (empty in blind pick).
+    pub assigned_position: Option<String>,
 }
 
 /// Friendly names for common queues (the client's own descriptions vary by locale/patch).
@@ -160,9 +162,17 @@ struct Search {
     estimated_queue_time: Option<f64>,
 }
 #[derive(Deserialize, Default)]
-#[serde(default)]
+#[serde(rename_all = "camelCase", default)]
 struct ChampSelect {
     timer: CsTimer,
+    local_player_cell_id: Option<i64>,
+    my_team: Vec<CsMember>,
+}
+#[derive(Deserialize, Default)]
+#[serde(rename_all = "camelCase", default)]
+struct CsMember {
+    cell_id: Option<i64>,
+    assigned_position: Option<String>,
 }
 #[derive(Deserialize, Default)]
 #[serde(rename_all = "camelCase", default)]
@@ -272,6 +282,7 @@ impl Lcu {
             est_queue_time: None,
             champ_select_stage: None,
             phase_time_left: None,
+            assigned_position: None,
         };
         if phase == Phase::None {
             return Some(info);
@@ -311,6 +322,13 @@ impl Lcu {
                 if !cs.timer.is_infinite {
                     info.phase_time_left = cs.timer.adjusted_time_left_in_phase.map(|ms| (ms / 1000.0).max(0.0));
                 }
+                info.assigned_position = cs
+                    .my_team
+                    .iter()
+                    .find(|m| m.cell_id.is_some() && m.cell_id == cs.local_player_cell_id)
+                    .and_then(|m| m.assigned_position.as_deref())
+                    .map(|p| p.trim().to_ascii_lowercase())
+                    .filter(|p| crate::settings::role_name(p).is_some());
             }
         }
         Some(info)
