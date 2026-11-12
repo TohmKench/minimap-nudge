@@ -5,6 +5,7 @@
   "description": "Tray app that reminds you to check the minimap during League of Legends matches (Tauri/Rust).",
   "license": "MIT",
   "scripts": {
+    "tauri": "tauri",
     "dev": "tauri dev",
     "build": "tauri build",
     "build:exe": "tauri build --no-bundle",

@@ -22,7 +22,7 @@ jobs:
   release:
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Work out version and whether it's already released
         id: v
@@ -52,7 +52,7 @@ jobs:
         run: |
           [ -n "$KEY" ] || { echo "::error::Repo secret TAURI_SIGNING_PRIVATE_KEY is missing (Settings > Secrets and variables > Actions)"; exit 1; }
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v5
         if: steps.v.outputs.skip == 'false'
         with:
           node-version: 22
