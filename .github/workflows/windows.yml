@@ -1,0 +1,29 @@
+# Tests + a compile check on real Windows for every push and PR.
+# (Releases are published by release.yml when a version tag is pushed.)
+name: test
+
+on:
+  push:
+    branches: ['**']
+  pull_request:
+
+jobs:
+  test:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+      - run: npm ci
+      - name: JS tests
+        run: npm run test:js
+      - name: Rust tests (incl. watcher vs fake League server over SChannel TLS)
+        run: cargo test --manifest-path src-tauri/Cargo.toml
+      - name: Compile check
+        run: npx tauri build --no-bundle

@@ -1,0 +1,85 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>Minimap Nudge</title>
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <header class="status" id="status" data-state="waiting">
+    <div class="status-main">
+      <div class="radar" aria-hidden="true"><span></span></div>
+      <div>
+        <div class="status-title" id="statusTitle">Waiting for a match</div>
+        <div class="status-sub" id="statusSub">Runs in the tray. Start a game and it'll pick it up.</div>
+      </div>
+    </div>
+    <label class="switch" title="Turn reminders on or off">
+      <input type="checkbox" id="enabled" />
+      <span class="slider"></span>
+    </label>
+  </header>
+
+  <main>
+    <section>
+      <div class="section-head">
+        <h2>Reminder schedule</h2>
+        <button class="ghost" id="addPhase">+ Add change</button>
+      </div>
+      <p class="hint">Change how often you're nudged as the game goes on. Each change takes effect at its start minute.</p>
+      <div id="phases"></div>
+      <div class="timeline" id="timeline" aria-label="Preview of pings over the first 40 minutes"></div>
+      <div class="timeline-scale"><span>0:00</span><span>10:00</span><span>20:00</span><span>30:00</span><span>40:00</span></div>
+      <p class="preview" id="preview"></p>
+    </section>
+
+    <section>
+      <div class="section-head">
+        <h2>Alert sound</h2>
+        <button class="ghost" id="addSound">Upload your own…</button>
+      </div>
+      <div id="sounds" class="sounds"></div>
+      <p class="error" id="soundError" hidden></p>
+      <div class="volume">
+        <span>Volume</span>
+        <input type="range" id="volume" min="0" max="100" step="1" />
+        <span id="volumeVal" class="mono"></span>
+      </div>
+    </section>
+
+    <section>
+      <div class="section-head">
+        <h2>Updates</h2>
+        <button class="ghost" id="checkUpdate">Check now</button>
+      </div>
+      <div class="update" id="update" data-phase="idle">
+        <div class="update-text">
+          <div class="update-title" id="updateTitle">Minimap Nudge</div>
+          <div class="update-sub" id="updateSub">Checks GitHub for new versions automatically.</div>
+        </div>
+        <button class="primary" id="installUpdate" hidden>Update now</button>
+      </div>
+      <div class="progress" id="updateProgress" hidden><span></span></div>
+      <p class="notes" id="updateNotes" hidden></p>
+    </section>
+
+    <section>
+      <h2>Options</h2>
+      <label class="check">
+        <input type="checkbox" id="srOnly" />
+        <span>Only on Summoner's Rift <em>(stay quiet in ARAM, Arena, etc.)</em></span>
+      </label>
+      <label class="check">
+        <input type="checkbox" id="startup" />
+        <span>Start with Windows <em>(launches hidden in the tray)</em></span>
+      </label>
+    </section>
+  </main>
+
+  <footer>Closing this window keeps it running in the tray. Right-click the tray icon to quit.</footer>
+
+  <script src="schedule.js"></script>
+  <script src="bridge.js"></script>
+  <script src="renderer.js"></script>
+</body>
+</html>

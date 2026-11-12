@@ -1,0 +1,24 @@
+{
+  "_comment": "Shared by src-tauri (Rust) and test/schedule.test.js (JS) so the settings-page preview and the real scheduler can't drift apart.",
+  "alertTimes": [
+    { "name": "every 3 min", "phases": [{ "startMin": 0, "intervalSec": 180 }], "until": 900, "expected": [180, 360, 540, 720, 900] },
+    { "name": "speed up at 10 min", "phases": [{ "startMin": 0, "intervalSec": 180 }, { "startMin": 10, "intervalSec": 60 }], "until": 780, "expected": [180, 360, 540, 600, 660, 720, 780] },
+    { "name": "slow down at 3 min", "phases": [{ "startMin": 0, "intervalSec": 60 }, { "startMin": 3, "intervalSec": 300 }], "until": 1000, "expected": [60, 120, 180, 480, 780] },
+    { "name": "no double beep", "phases": [{ "startMin": 0, "intervalSec": 180 }, { "startMin": 3.1666666666666665, "intervalSec": 60 }], "until": 320, "expected": [180, 250, 310] },
+    { "name": "silent then resume", "phases": [{ "startMin": 0, "intervalSec": 300 }, { "startMin": 12, "intervalSec": null }, { "startMin": 20, "intervalSec": 120 }], "until": 1500, "expected": [300, 600, 1200, 1320, 1440] },
+    { "name": "trailing silent", "phases": [{ "startMin": 0, "intervalSec": 300 }, { "startMin": 11, "intervalSec": null }], "until": 5000, "expected": [300, 600] },
+    { "name": "missing phase 0 inherits first interval", "phases": [{ "startMin": 5, "intervalSec": 120 }], "until": 600, "expected": [120, 240, 300, 420, 540] },
+    { "name": "interval clamped to 15 s", "phases": [{ "startMin": 0, "intervalSec": 3 }], "until": 60, "expected": [15, 30, 45, 60] },
+    { "name": "unsorted + duplicate start (last wins)", "phases": [{ "startMin": 10, "intervalSec": 60 }, { "startMin": 0, "intervalSec": 240 }, { "startMin": 10, "intervalSec": 120 }], "until": 900, "expected": [240, 480, 600, 720, 840] },
+    { "name": "phase 14 s after a ping is still merged", "phases": [{ "startMin": 0, "intervalSec": 180 }, { "startMin": 3.2333333333333334, "intervalSec": 60 }], "until": 320, "expected": [180, 254, 314] },
+    { "name": "30 s intervals", "phases": [{ "startMin": 0, "intervalSec": 30 }], "until": 120, "expected": [30, 60, 90, 120] },
+    { "name": "all silent", "phases": [{ "startMin": 0, "intervalSec": null }], "until": 3000, "expected": [] },
+    { "name": "silent start, pings from 2 min", "phases": [{ "startMin": 0, "intervalSec": null }, { "startMin": 2, "intervalSec": 60 }], "until": 300, "expected": [120, 180, 240, 300] }
+  ],
+  "nextAlertAfter": [
+    { "phases": [{ "startMin": 0, "intervalSec": 180 }, { "startMin": 10, "intervalSec": 60 }], "t": 0, "expected": 180 },
+    { "phases": [{ "startMin": 0, "intervalSec": 180 }, { "startMin": 10, "intervalSec": 60 }], "t": 545.3, "expected": 600 },
+    { "phases": [{ "startMin": 0, "intervalSec": 180 }, { "startMin": 10, "intervalSec": 60 }], "t": 1234, "expected": 1260 },
+    { "phases": [{ "startMin": 0, "intervalSec": 300 }, { "startMin": 11, "intervalSec": null }], "t": 700, "expected": null }
+  ]
+}

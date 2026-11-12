@@ -1,0 +1,46 @@
+[package]
+name = "minimap-nudge"
+version = "2.1.0"
+description = "Tray app that reminds you to check the minimap during League of Legends matches"
+authors = ["Thomas"]
+license = "MIT"
+edition = "2021"
+rust-version = "1.80"
+
+[lib]
+name = "minimap_nudge_lib"
+crate-type = ["rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = ["tray-icon", "image-png"] }
+tauri-plugin-dialog = "2"
+tauri-plugin-autostart = "2"
+tauri-plugin-single-instance = "2"
+tauri-plugin-updater = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+# native-tls = SChannel on Windows (nothing extra to bundle), OpenSSL on Linux.
+reqwest = { version = "0.12", default-features = false, features = ["json", "native-tls"] }
+tokio = { version = "1", features = ["time", "sync", "macros", "rt-multi-thread", "net", "io-util"] }
+# rodio only plays; decoding is done directly with symphonia (rodio 0.20's
+# symphonia wrapper panics on some OGG/M4A files).
+rodio = { version = "0.20", default-features = false }
+symphonia = { version = "0.5", features = ["aac", "isomp4", "mp3"] }
+chrono = { version = "0.4", default-features = false, features = ["clock"] }
+uuid = { version = "1", features = ["v4"] }
+
+[dev-dependencies]
+tempfile = "3"
+tokio-native-tls = "0.3"
+native-tls = "0.2"
+
+[profile.release]
+codegen-units = 1
+lto = true
+opt-level = "s"
+# unwind (not abort) so a panic inside a third-party decoder is caught, not fatal
+panic = "unwind"
+strip = true

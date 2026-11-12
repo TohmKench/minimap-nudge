@@ -1,0 +1,19 @@
+{
+  "name": "minimap-nudge",
+  "version": "2.1.0",
+  "private": true,
+  "description": "Tray app that reminds you to check the minimap during League of Legends matches (Tauri/Rust).",
+  "license": "MIT",
+  "scripts": {
+    "dev": "tauri dev",
+    "build": "tauri build",
+    "build:exe": "tauri build --no-bundle",
+    "test": "node --test test/*.test.js && cargo test --manifest-path src-tauri/Cargo.toml",
+    "test:js": "node --test test/*.test.js",
+    "mock-game": "node test/mock-league-server.js",
+    "release": "node scripts/release.mjs"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "^2"
+  }
+}

@@ -1,0 +1,8 @@
+node_modules/
+src-tauri/target/
+src-tauri/gen/
+
+# Update-signing keys must never be committed
+*.key
+*.key.pub
+keys/
