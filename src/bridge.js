@@ -14,6 +14,7 @@
     onSettings: (fn) => listen('settings', (e) => fn(e.payload)),
     onPinged: (fn) => listen('pinged', () => fn()),
     checkUpdate: () => invoke('check_update'),
+    setHotkeyCapture: (on) => invoke('set_hotkey_capture', { on }),
     installUpdate: () => invoke('install_update'),
     onUpdate: (fn) => listen('update', (e) => fn(e.payload)),
   };

@@ -46,6 +46,8 @@ pub struct Status {
     pub role_source: Option<&'static str>,
     /// True when the active role has its own customised schedule.
     pub role_schedule: bool,
+    /// Match-found popup state (filled in by the app loop while the ready check is up).
+    pub ready_check: Option<crate::autoaccept::ReadyCheckStatus>,
     /// Whether pings will play for the upcoming/current game (false = mode isn't Summoner's Rift and SR-only is on).
     pub will_ping: bool,
 }
@@ -275,6 +277,7 @@ impl Watcher {
             role_schedule: role.as_deref().is_some_and(|r| s.role_schedules.contains_key(r)),
             role,
             role_source,
+            ready_check: None,
             will_ping: self.will_ping(s),
         }
     }

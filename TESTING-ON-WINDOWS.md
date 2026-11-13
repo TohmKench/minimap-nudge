@@ -25,6 +25,8 @@ With League open, the settings header should follow along: **League client open 
 
 **Role schedules:** in Settings, open the **Jungle** tab (or your main role), click **Customise for Jungle** and set something easy to notice, like every 1 min. Play a draft or ranked game as that role. Champ select should show "Jungle schedule, first ping at 1:00", the first ping should come at 1:00, and the log's `game detected` line names the schedule it used.
 
+**Auto-accept:** with League open, press **Alt+A** from any window. You should hear a rising beep, and Settings → Match found shows the switch on. Queue up: when the match pops, the header shows "Auto-accepting in 2s" and the app accepts it for you. Pressing Alt+A again gives a falling beep (off).
+
 ## 4. A real game
 
 1. Leave the app in the tray and play a normal Summoner's Rift game, or a Practice Tool session (it uses the same API).

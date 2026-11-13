@@ -154,9 +154,14 @@ function clientSub(st) {
           c.estQueueTime ? ` in queue (est. ${formatClock(c.estQueueTime)})` : ' in queue'));
       }
       break;
-    case 'readyCheck':
-      add('Accept it in the client');
+    case 'readyCheck': {
+      const rc = st.readyCheck;
+      if (rc && (rc.autoAccepted || rc.response === 'accepted')) add(rc.autoAccepted ? 'Accepted automatically \u2713' : 'Accepted \u2713');
+      else if (rc && rc.response === 'declined') add('Declined');
+      else if (rc && rc.auto && rc.acceptIn != null) add(`Auto-accepting in ${Math.ceil(rc.acceptIn)}s \u2013 decline in the client to skip`);
+      else add('Accept it in the client');
       break;
+    }
     case 'champSelect':
       add(c.queue);
       if (c.champSelectStage) add(c.phaseTimeLeft != null ? `${c.champSelectStage} \u2013 ${formatClock(c.phaseTimeLeft)} left` : c.champSelectStage);
@@ -383,6 +388,80 @@ volume.addEventListener('change', async () => {
   api.preview();
 });
 
+// ------------------------------------------------------------ match found / shortcut
+
+const prettyKeys = (acc) => (acc ? acc.split('+').join(' + ') : 'None');
+
+function renderAccept() {
+  const s = state.settings;
+  $('autoAccept').checked = s.autoAccept;
+  if (document.activeElement !== $('acceptDelay')) $('acceptDelay').value = String(s.autoAcceptDelay);
+  if (!recording) $('hotkeyBtn').textContent = prettyKeys(s.autoAcceptHotkey);
+  $('hotkeyClear').hidden = !s.autoAcceptHotkey;
+  const err = $('hotkeyError');
+  err.hidden = !state.hotkeyError;
+  err.textContent = state.hotkeyError || '';
+}
+
+$('autoAccept').addEventListener('change', (e) => save({ autoAccept: e.target.checked }));
+$('acceptDelay').addEventListener('change', (e) => {
+  const n = Number(e.target.value);
+  if (Number.isFinite(n)) save({ autoAcceptDelay: Math.max(0, Math.min(10, Math.round(n))) });
+});
+
+// Recording a new shortcut: click the box, press the keys.
+let recording = false;
+const MODS = ['Control', 'Alt', 'Shift', 'Meta', 'AltGraph', 'OS'];
+
+function keyName(code) {
+  let m;
+  if ((m = /^Key([A-Z])$/.exec(code))) return m[1];
+  if ((m = /^Digit(\d)$/.exec(code))) return m[1];
+  return code; // F1–F24, Numpad5, ArrowUp, Space, Backquote, …
+}
+
+async function stopRecording() {
+  recording = false;
+  $('hotkeyBtn').classList.remove('recording');
+  window.removeEventListener('keydown', onRecordKey, true);
+  state = await api.setHotkeyCapture(false);
+  render();
+}
+
+async function onRecordKey(e) {
+  e.preventDefault();
+  e.stopPropagation();
+  if (e.key === 'Escape') return stopRecording();
+  if (MODS.includes(e.key)) return; // wait for the actual key
+  const mods = [];
+  if (e.ctrlKey) mods.push('Ctrl');
+  if (e.altKey) mods.push('Alt');
+  if (e.shiftKey) mods.push('Shift');
+  if (e.metaKey) mods.push('Super');
+  const isF = /^F\d{1,2}$/.test(e.code);
+  if (!mods.length && !isF) {
+    $('hotkeyBtn').textContent = 'Add Ctrl, Alt or Shift\u2026';
+    return;
+  }
+  const acc = [...mods, keyName(e.code)].join('+');
+  recording = false;
+  $('hotkeyBtn').classList.remove('recording');
+  window.removeEventListener('keydown', onRecordKey, true);
+  await save({ autoAcceptHotkey: acc });
+  state = await api.setHotkeyCapture(false);
+  render();
+}
+
+$('hotkeyBtn').addEventListener('click', async () => {
+  if (recording) return stopRecording();
+  recording = true;
+  $('hotkeyBtn').classList.add('recording');
+  $('hotkeyBtn').textContent = 'Press keys\u2026 (Esc to cancel)';
+  await api.setHotkeyCapture(true); // release the old shortcut while recording
+  window.addEventListener('keydown', onRecordKey, true);
+});
+$('hotkeyClear').addEventListener('click', () => save({ autoAcceptHotkey: '' }));
+
 // ------------------------------------------------------------ options
 
 $('enabled').addEventListener('change', (e) => save({ enabled: e.target.checked }));
@@ -453,6 +532,7 @@ function render() {
   $('volumeVal').textContent = `${volume.value}%`;
   renderSchedule();
   renderRoleMode();
+  renderAccept();
   renderSounds();
   if (state.status) renderStatus(state.status);
   renderRoleActive(state.status);

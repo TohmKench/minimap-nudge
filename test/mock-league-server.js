@@ -96,14 +96,24 @@ game.listen(PORT, '127.0.0.1');
 if (CLIENT) {
   const password = 'mock-' + Math.random().toString(36).slice(2, 10);
   const auth = 'Basic ' + Buffer.from(`riot:${password}`).toString('base64');
+  let accepted = false;
   const client = https.createServer(tls, (req, res) => {
     if (req.headers.authorization !== auth) return json(res, 401, { message: 'unauthorized' });
     const phase = clientPhase();
+    if (req.method === 'POST' && req.url === '/lol-matchmaking/v1/ready-check/accept') {
+      if (phase === 'ReadyCheck') { accepted = true; console.log('\n  >> ready check ACCEPTED by the app'); }
+      res.statusCode = 204;
+      return res.end();
+    }
     const queue = { id: QUEUES[MODE] ?? 420, mapId: MAPS[MODE] ?? 11, description: 'mock queue' };
     switch (req.url) {
       case '/lol-gameflow/v1/gameflow-phase': return json(res, 200, phase);
       case '/lol-gameflow/v1/session': return json(res, 200, { phase, gameData: { isCustomGame: false, queue }, map: { id: queue.mapId } });
       case '/lol-lobby/v2/lobby': return json(res, 200, { members: [{}, {}], gameConfig: { queueId: queue.id, mapId: queue.mapId } });
+      case '/lol-matchmaking/v1/ready-check':
+        return json(res, 200, phase === 'ReadyCheck'
+          ? { state: 'InProgress', playerResponse: accepted ? 'Accepted' : 'None', timer: elapsed() - phaseStart() }
+          : { state: 'Invalid', playerResponse: 'None', timer: 0 });
       case '/lol-matchmaking/v1/search': return json(res, 200, { searchState: 'Searching', timeInQueue: elapsed() - phaseStart(), estimatedQueueTime: 95 });
       case '/lol-champ-select/v1/session': {
         const left = Math.max(0, 30 - (elapsed() - phaseStart()) * 2) * 1000;

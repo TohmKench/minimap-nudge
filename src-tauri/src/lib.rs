@@ -1,4 +1,5 @@
 pub mod audio;
+pub mod autoaccept;
 pub mod lcu;
 pub mod league;
 pub mod logger;
@@ -12,7 +13,11 @@ use league::LeagueClient;
 use logger::log;
 use schedule::format_clock;
 use serde::Serialize;
-use settings::{role_name, CustomSound, Settings, SettingsStore, BUILTIN_SOUNDS, DEFAULT_SOUND, ROLES, ROLE_AUTO};
+use settings::{
+    role_name, CustomSound, Settings, SettingsStore, BUILTIN_SOUNDS, DEFAULT_SOUND, ROLES, ROLE_AUTO, SOUND_TOGGLE_OFF,
+    SOUND_TOGGLE_ON,
+};
+use tauri_plugin_global_shortcut::{GlobalShortcutExt, Shortcut, ShortcutState};
 use std::path::PathBuf;
 use std::sync::Mutex;
 use tauri::image::Image;
@@ -31,6 +36,7 @@ struct TrayUi {
     status_item: MenuItem<Wry>,
     enabled_item: CheckMenuItem<Wry>,
     update_item: MenuItem<Wry>,
+    accept_item: CheckMenuItem<Wry>,
     role_menu: Submenu<Wry>,
     role_items: Vec<(String, CheckMenuItem<Wry>)>,
     last_key: String,
@@ -50,6 +56,12 @@ struct AppState {
     audio: AudioPlayer,
     config_dir: PathBuf,
     tray: Mutex<Option<TrayUi>>,
+    /// Latest match-found popup state (for the settings page).
+    ready_check: Mutex<Option<autoaccept::ReadyCheckStatus>>,
+    /// Why the auto-accept shortcut couldn't be registered, if it couldn't.
+    hotkey_error: Mutex<Option<String>>,
+    /// True while the settings page is recording a new shortcut.
+    hotkey_capturing: Mutex<bool>,
 }
 
 #[derive(Serialize)]
@@ -75,6 +87,7 @@ struct PublicState {
     sounds: Vec<SoundInfo>,
     status: Status,
     update: UpdateStatus,
+    hotkey_error: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     error: Option<String>,
 }
@@ -87,7 +100,10 @@ fn current_settings(app: &AppHandle) -> Settings {
 
 fn current_status(app: &AppHandle) -> Status {
     let s = current_settings(app);
-    app.state::<AppState>().watcher.lock().unwrap().status(&s)
+    let state = app.state::<AppState>();
+    let mut st = state.watcher.lock().unwrap().status(&s);
+    st.ready_check = state.ready_check.lock().unwrap().clone();
+    st
 }
 
 fn public_state(app: &AppHandle, error: Option<String>) -> PublicState {
@@ -99,7 +115,8 @@ fn public_state(app: &AppHandle, error: Option<String>) -> PublicState {
     sounds.extend(settings.custom_sounds.iter().map(|c| SoundInfo { id: c.id.clone(), name: c.name.clone(), builtin: false }));
     let update = app.state::<Updates>().status();
     let roles = ROLES.iter().map(|(id, name)| RoleInfo { id, name }).collect();
-    PublicState { status: current_status(app), settings, roles, sounds, update, error }
+    let hotkey_error = app.state::<AppState>().hotkey_error.lock().unwrap().clone();
+    PublicState { status: current_status(app), settings, roles, sounds, update, hotkey_error, error }
 }
 
 fn sound_source(settings: &Settings, id: Option<&str>) -> SoundSource {
@@ -117,6 +134,40 @@ fn play(app: &AppHandle, id: Option<&str>) {
     if app.get_webview_window(WINDOW).is_some() {
         let _ = app.emit_to(WINDOW, "pinged", ());
     }
+}
+
+fn play_bytes(app: &AppHandle, bytes: &'static [u8]) {
+    let s = current_settings(app);
+    app.state::<AppState>().audio.play(SoundSource::Builtin(bytes), s.volume);
+}
+
+/// (Re-)register the auto-accept toggle shortcut from settings.
+fn register_hotkey(app: &AppHandle) {
+    let gs = app.global_shortcut();
+    let _ = gs.unregister_all();
+    let state = app.state::<AppState>();
+    let hk = current_settings(app).auto_accept_hotkey;
+    let result: Result<(), String> = if hk.is_empty() || *state.hotkey_capturing.lock().unwrap() {
+        Ok(())
+    } else {
+        hk.parse::<Shortcut>()
+            .map_err(|e| format!("“{hk}” isn't a valid shortcut ({e})"))
+            .and_then(|sc| {
+                gs.register(sc)
+                    .map_err(|e| format!("Couldn't use {hk}: another app may already be using it ({e})"))
+            })
+    };
+    if let Err(e) = &result {
+        log(&format!("hotkey: {e}"));
+    }
+    *state.hotkey_error.lock().unwrap() = result.err();
+}
+
+fn toggle_auto_accept(app: &AppHandle) {
+    let on = !current_settings(app).auto_accept;
+    let _ = apply_settings(app, &serde_json::json!({ "autoAccept": on }));
+    play_bytes(app, if on { SOUND_TOGGLE_ON } else { SOUND_TOGGLE_OFF });
+    log(&format!("auto-accept {} (shortcut)", if on { "on" } else { "off" }));
 }
 
 fn sync_autostart(app: &AppHandle, want: bool) {
@@ -143,6 +194,9 @@ fn apply_settings(app: &AppHandle, patch: &serde_json::Value) -> Result<(), Stri
     };
     if before.launch_at_startup != after.launch_at_startup {
         sync_autostart(app, after.launch_at_startup);
+    }
+    if before.auto_accept_hotkey != after.auto_accept_hotkey {
+        register_hotkey(app);
     }
     state.watcher.lock().unwrap().recompute(&after); // uses the active role's schedule
     refresh_tray(app, &current_status(app));
@@ -228,8 +282,18 @@ fn refresh_tray(app: &AppHandle, st: &Status) {
         (Some(r), _) => format!("Role: Auto ({r})"),
         _ => "Role: Auto".to_string(),
     };
-    let key = format!("{coarse}|{enabled}|{}|{role_label}", settings.role_mode);
+    let accept_label = if settings.auto_accept_hotkey.is_empty() {
+        "Auto-accept matches".to_string()
+    } else {
+        format!("Auto-accept matches ({})", settings.auto_accept_hotkey)
+    };
+    let key = format!(
+        "{coarse}|{enabled}|{}|{role_label}|{}|{accept_label}",
+        settings.role_mode, settings.auto_accept
+    );
     if key != ui.last_key {
+        let _ = ui.accept_item.set_checked(settings.auto_accept);
+        let _ = ui.accept_item.set_text(&accept_label);
         let _ = ui.status_item.set_text(&coarse);
         let _ = ui.enabled_item.set_checked(enabled);
         let _ = ui.role_menu.set_text(&role_label);
@@ -245,6 +309,14 @@ fn build_tray(app: &AppHandle) -> tauri::Result<TrayUi> {
     let status_item = MenuItem::with_id(app, "status", "Waiting for League", false, None::<&str>)?;
     let enabled_item = CheckMenuItem::with_id(app, "enabled", "Alerts enabled", true, enabled, None::<&str>)?;
     let update_item = MenuItem::with_id(app, "update", "Check for updates", true, None::<&str>)?;
+    let accept_item = CheckMenuItem::with_id(
+        app,
+        "autoaccept",
+        "Auto-accept matches",
+        true,
+        current_settings(app).auto_accept,
+        None::<&str>,
+    )?;
     let role_mode = current_settings(app).role_mode;
     let mut role_items = vec![(
         ROLE_AUTO.to_string(),
@@ -267,6 +339,7 @@ fn build_tray(app: &AppHandle) -> tauri::Result<TrayUi> {
             &MenuItem::with_id(app, "settings", "Settings…", true, None::<&str>)?,
             &enabled_item,
             &role_menu,
+            &accept_item,
             &MenuItem::with_id(app, "test", "Test sound", true, None::<&str>)?,
             &MenuItem::with_id(app, "logs", "Open log folder", true, None::<&str>)?,
             &update_item,
@@ -285,6 +358,17 @@ fn build_tray(app: &AppHandle) -> tauri::Result<TrayUi> {
                 let _ = apply_settings(app, &serde_json::json!({ "roleMode": &id[5..] }));
             }
             "settings" => open_window(app),
+            "autoaccept" => {
+                let state = app.state::<AppState>();
+                let checked = state
+                    .tray
+                    .lock()
+                    .unwrap()
+                    .as_ref()
+                    .and_then(|ui| ui.accept_item.is_checked().ok())
+                    .unwrap_or(false);
+                let _ = apply_settings(app, &serde_json::json!({ "autoAccept": checked }));
+            }
             "enabled" => {
                 let state = app.state::<AppState>();
                 let checked = state
@@ -327,6 +411,7 @@ fn build_tray(app: &AppHandle) -> tauri::Result<TrayUi> {
         status_item,
         enabled_item,
         update_item,
+        accept_item,
         role_menu,
         role_items,
         last_key: String::new(),
@@ -421,6 +506,14 @@ fn preview(app: AppHandle, id: Option<String>) {
     play(&app, id.as_deref());
 }
 
+/// The settings page is recording a new shortcut: release the current one meanwhile.
+#[tauri::command]
+fn set_hotkey_capture(app: AppHandle, on: bool) -> PublicState {
+    *app.state::<AppState>().hotkey_capturing.lock().unwrap() = on;
+    register_hotkey(&app);
+    public_state(&app, None)
+}
+
 #[tauri::command]
 async fn check_update(app: AppHandle) -> UpdateStatus {
     updates::check(&app).await
@@ -441,11 +534,36 @@ fn spawn_watcher(app: AppHandle) {
         let mut tick = tokio::time::interval(watcher::POLL_INTERVAL);
         tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
         let mut last_state = None;
+        let mut acceptor = autoaccept::AutoAccept::new();
         loop {
             tick.tick().await;
             let settings = current_settings(&app);
             let state = app.state::<AppState>();
-            let (events, status) = watcher::poll_once(&client, &lcu, &state.watcher, &settings).await;
+            let (events, mut status) = watcher::poll_once(&client, &lcu, &state.watcher, &settings).await;
+
+            // Match found: auto-accept if it's on.
+            let in_ready_check = status.client.as_ref().is_some_and(|c| c.phase == lcu::Phase::ReadyCheck);
+            let rc = if in_ready_check { lcu.ready_check().await } else { None };
+            let (action, mut rc_status) =
+                acceptor.step(rc.as_ref(), settings.auto_accept, settings.auto_accept_delay, std::time::Instant::now());
+            if action == autoaccept::Action::Accept {
+                let ok = lcu.accept_ready_check().await;
+                acceptor.accepted(ok);
+                let queue = status.client.as_ref().and_then(|c| c.queue.clone()).unwrap_or_default();
+                log(&format!("auto-accept: {} {queue}", if ok { "accepted match" } else { "accept failed for" }));
+                if let Some(r) = rc_status.as_mut() {
+                    r.auto_accepted = ok;
+                }
+            }
+            *state.ready_check.lock().unwrap() = rc_status.clone();
+            status.ready_check = rc_status;
+            if let Some(r) = &status.ready_check {
+                if r.auto_accepted || r.response == "accepted" {
+                    status.line = "Match found — accepted".into();
+                } else if let Some(left) = r.accept_in {
+                    status.line = format!("Match found — auto-accepting in {}s", left.ceil() as u64);
+                }
+            }
 
             for ev in events {
                 match ev {
@@ -502,6 +620,15 @@ pub fn run() {
             Some(vec!["--hidden"]),
         ))
         .plugin(tauri_plugin_updater::Builder::new().build())
+        .plugin(
+            tauri_plugin_global_shortcut::Builder::new()
+                .with_handler(|app, _shortcut, event| {
+                    if event.state() == ShortcutState::Pressed {
+                        toggle_auto_accept(app);
+                    }
+                })
+                .build(),
+        )
         .invoke_handler(tauri::generate_handler![
             get_state,
             update_settings,
@@ -509,7 +636,8 @@ pub fn run() {
             remove_sound,
             preview,
             check_update,
-            install_update
+            install_update,
+            set_hotkey_capture
         ])
         .setup(move |app| {
             let handle = app.handle().clone();
@@ -525,7 +653,11 @@ pub fn run() {
                 audio: AudioPlayer::spawn(),
                 config_dir,
                 tray: Mutex::new(None),
+                ready_check: Mutex::new(None),
+                hotkey_error: Mutex::new(None),
+                hotkey_capturing: Mutex::new(false),
             });
+            register_hotkey(&handle);
 
             let tray_ok = match build_tray(&handle) {
                 Ok(ui) => {

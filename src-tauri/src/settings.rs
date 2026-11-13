@@ -36,6 +36,12 @@ pub fn role_name(id: &str) -> Option<&'static str> {
     ROLES.iter().find(|(k, _)| *k == id).map(|(_, n)| *n)
 }
 
+pub const DEFAULT_HOTKEY: &str = "Alt+A";
+
+/// Feedback when the auto-accept shortcut is pressed.
+pub const SOUND_TOGGLE_ON: &[u8] = include_bytes!("../sounds/toggle-on.wav");
+pub const SOUND_TOGGLE_OFF: &[u8] = include_bytes!("../sounds/toggle-off.wav");
+
 /// "auto" = use the role assigned in champ select; otherwise a fixed role id.
 pub const ROLE_AUTO: &str = "auto";
 
@@ -60,6 +66,12 @@ pub struct Settings {
     pub role_schedules: BTreeMap<String, Vec<Phase>>,
     /// `"auto"` or a role id from `ROLES`.
     pub role_mode: String,
+    /// Accept the "match found" popup automatically.
+    pub auto_accept: bool,
+    /// Seconds to wait before accepting (time to decline by hand).
+    pub auto_accept_delay: f64,
+    /// Global shortcut that toggles auto-accept, e.g. "Alt+A"; "" = none.
+    pub auto_accept_hotkey: String,
 }
 
 impl Default for Settings {
@@ -74,6 +86,9 @@ impl Default for Settings {
             launch_at_startup: false,
             role_schedules: BTreeMap::new(),
             role_mode: ROLE_AUTO.into(),
+            auto_accept: false,
+            auto_accept_delay: 2.0,
+            auto_accept_hotkey: DEFAULT_HOTKEY.into(),
         }
     }
 }
@@ -89,6 +104,9 @@ impl Settings {
         if self.role_mode != ROLE_AUTO && role_name(&self.role_mode).is_none() {
             self.role_mode = ROLE_AUTO.into();
         }
+        self.auto_accept_delay =
+            if self.auto_accept_delay.is_finite() { self.auto_accept_delay.clamp(0.0, 10.0) } else { 2.0 };
+        self.auto_accept_hotkey = self.auto_accept_hotkey.trim().to_string();
         self.custom_sounds.retain(|c| !c.id.is_empty() && c.file.is_file());
         let known = BUILTIN_SOUNDS.iter().any(|b| b.id == self.sound_id)
             || self.custom_sounds.iter().any(|c| c.id == self.sound_id);
@@ -202,6 +220,15 @@ mod tests {
         assert_eq!(s.phases_for(Some("jungle"))[0].interval_sec, Some(60.0));
         assert_eq!(s.phases_for(Some("top")), s.phases.as_slice(), "uncustomised role uses default");
         assert_eq!(s.phases_for(None), s.phases.as_slice());
+    }
+
+    #[test]
+    fn auto_accept_defaults_and_clamp() {
+        let s = Settings::default();
+        assert!(!s.auto_accept, "off by default");
+        assert_eq!((s.auto_accept_delay, s.auto_accept_hotkey.as_str()), (2.0, "Alt+A"));
+        let s = s.patched(&json!({"autoAccept": true, "autoAcceptDelay": 99, "autoAcceptHotkey": "  Ctrl+Shift+F9 "}));
+        assert_eq!((s.auto_accept, s.auto_accept_delay, s.auto_accept_hotkey.as_str()), (true, 10.0, "Ctrl+Shift+F9"));
     }
 
     #[test]

@@ -9,6 +9,7 @@ const PASSWORD: &str = "s3cr3t-Token_x";
 
 #[derive(Clone)]
 struct Fake {
+    accepted: bool,
     phase: &'static str,
     queue_id: i64,
     map_id: i64,
@@ -42,8 +43,19 @@ async fn fake_client(state: Arc<Mutex<Fake>>) -> u16 {
         if auth != Some(expected_auth().as_str()) {
             return (401, r#"{"message":"unauthorized"}"#.into());
         }
+        if path == "/lol-matchmaking/v1/ready-check/accept" {
+            state.lock().unwrap().accepted = true;
+            return (204, String::new());
+        }
         let f = state.lock().unwrap().clone();
         match path {
+            "/lol-matchmaking/v1/ready-check" => (
+                200,
+                format!(
+                    r#"{{"state":"InProgress","playerResponse":"{}","timer":3.0}}"#,
+                    if f.accepted { "Accepted" } else { "None" }
+                ),
+            ),
             "/lol-gameflow/v1/gameflow-phase" => (200, format!("\"{}\"", f.phase)),
             "/lol-gameflow/v1/session" => (
                 200,
@@ -71,7 +83,7 @@ async fn fake_client(state: Arc<Mutex<Fake>>) -> u16 {
 
 #[tokio::test]
 async fn walks_through_client_phases() {
-    let state = Arc::new(Mutex::new(Fake { phase: "None", queue_id: 420, map_id: 11, members: 2 }));
+    let state = Arc::new(Mutex::new(Fake { accepted: false, phase: "None", queue_id: 420, map_id: 11, members: 2 }));
     let port = fake_client(state.clone()).await;
     let dir = tempfile::tempdir().unwrap();
     let lcu = Lcu::new(Some(dir.path().to_path_buf()));
@@ -120,9 +132,32 @@ async fn walks_through_client_phases() {
 
 #[tokio::test]
 async fn wrong_password_means_unknown_not_crash() {
-    let state = Arc::new(Mutex::new(Fake { phase: "Lobby", queue_id: 420, map_id: 11, members: 1 }));
+    let state = Arc::new(Mutex::new(Fake { accepted: false, phase: "Lobby", queue_id: 420, map_id: 11, members: 1 }));
     let port = fake_client(state).await;
     let dir = tempfile::tempdir().unwrap();
     std::fs::write(dir.path().join("lockfile"), format!("LeagueClient:1:{port}:wrong:https")).unwrap();
     assert_eq!(Lcu::new(Some(dir.path().to_path_buf())).snapshot().await, None);
+}
+
+#[tokio::test]
+async fn accepts_the_ready_check() {
+    let state = Arc::new(Mutex::new(Fake { accepted: false, phase: "ReadyCheck", queue_id: 420, map_id: 11, members: 1 }));
+    let port = fake_client(state.clone()).await;
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(dir.path().join("lockfile"), format!("LeagueClient:1:{port}:{PASSWORD}:https")).unwrap();
+    let lcu = Lcu::new(Some(dir.path().to_path_buf()));
+
+    let rc = lcu.ready_check().await.expect("ready check");
+    assert_eq!((rc.state.as_str(), rc.player_response.as_str()), ("InProgress", "None"));
+    assert!(lcu.accept_ready_check().await, "accept POST succeeds");
+    assert!(state.lock().unwrap().accepted, "fake client saw the accept");
+    assert_eq!(lcu.ready_check().await.unwrap().player_response, "Accepted");
+
+    // wrong password: accept refused, nothing accepted
+    let state2 = Arc::new(Mutex::new(Fake { accepted: false, phase: "ReadyCheck", queue_id: 420, map_id: 11, members: 1 }));
+    let port2 = fake_client(state2.clone()).await;
+    let dir2 = tempfile::tempdir().unwrap();
+    std::fs::write(dir2.path().join("lockfile"), format!("LeagueClient:1:{port2}:nope:https")).unwrap();
+    assert!(!Lcu::new(Some(dir2.path().to_path_buf())).accept_ready_check().await);
+    assert!(!state2.lock().unwrap().accepted);
 }

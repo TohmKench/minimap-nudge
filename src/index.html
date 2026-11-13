@@ -71,6 +71,30 @@
     </section>
 
     <section>
+      <h2>Match found</h2>
+      <div class="accept-row">
+        <div>
+          <div class="accept-title">Auto-accept</div>
+          <div class="accept-sub">Accepts the queue pop for you after
+            <input type="number" id="acceptDelay" min="0" max="10" step="1" aria-label="Seconds before accepting" /> s,
+            so there's still time to decline.</div>
+        </div>
+        <label class="switch" title="Auto-accept when a match is found">
+          <input type="checkbox" id="autoAccept" />
+          <span class="slider"></span>
+        </label>
+      </div>
+      <div class="hotkey-row">
+        <span>Toggle shortcut <em>(works in game)</em></span>
+        <span class="hotkey-controls">
+          <button class="hotkey" id="hotkeyBtn" title="Click, then press the keys you want">Alt + A</button>
+          <button class="icon" id="hotkeyClear" title="No shortcut" aria-label="Remove shortcut">✕</button>
+        </span>
+      </div>
+      <p class="error" id="hotkeyError" hidden></p>
+    </section>
+
+    <section>
       <h2>Options</h2>
       <label class="check">
         <input type="checkbox" id="srOnly" />

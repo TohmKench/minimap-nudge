@@ -335,6 +335,39 @@ impl Lcu {
     }
 }
 
+/// `/lol-matchmaking/v1/ready-check`
+#[derive(Debug, Clone, PartialEq, Deserialize, Default)]
+#[serde(rename_all = "camelCase", default)]
+pub struct ReadyCheck {
+    /// "Invalid" | "InProgress" | "EveryoneReady" | "StrangerNotReady" | "PartyNotReady" | "Error"
+    pub state: String,
+    /// "None" | "Accepted" | "Declined"
+    pub player_response: String,
+    pub timer: f64,
+}
+
+impl Lcu {
+    pub async fn ready_check(&self) -> Option<ReadyCheck> {
+        let c = self.creds()?;
+        self.get(&c, "/lol-matchmaking/v1/ready-check").await
+    }
+
+    /// Clicks "Accept" on the match-found popup. True if the client took it.
+    pub async fn accept_ready_check(&self) -> bool {
+        let Some(c) = self.creds() else { return false };
+        match self
+            .http
+            .post(format!("https://127.0.0.1:{}/lol-matchmaking/v1/ready-check/accept", c.port))
+            .basic_auth("riot", Some(&c.password))
+            .send()
+            .await
+        {
+            Ok(r) => r.status().is_success(),
+            Err(_) => false,
+        }
+    }
+}
+
 fn stage_name(p: &str) -> Option<&'static str> {
     Some(match p {
         "PLANNING" => "Planning",

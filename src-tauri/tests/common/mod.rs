@@ -36,7 +36,7 @@ pub async fn serve(handler: Handler) -> u16 {
                     .map(str::trim)
                     .map(str::to_string);
                 let (code, body) = handler(&path, auth.as_deref());
-                let reason = if code == 200 { "OK" } else { "Error" };
+                let reason = match code { 200 => "OK", 204 => "No Content", _ => "Error" };
                 let resp = format!(
                     "HTTP/1.1 {code} {reason}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
                     body.len()
