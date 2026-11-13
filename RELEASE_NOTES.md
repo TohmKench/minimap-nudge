@@ -1,4 +1,4 @@
-Role schedules.
-- Give Top, Jungle, Mid, Bot or Support its own reminder schedule (Settings > Reminder schedule tabs)
-- Your role is picked up automatically in champion select, or set it yourself in Settings or the tray's Role menu
-- Champion select shows which schedule will be used and when the first ping is
+Auto-accept.
+- Turn on Settings > Match found > Auto-accept, or press Alt+A anywhere (even in game); a rising beep means on, a falling beep off
+- Accepts 2 seconds after the pop (adjustable) so you can still decline
+- Change the shortcut to any key combination in Settings
