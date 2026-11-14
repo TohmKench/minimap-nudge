@@ -1,5 +1,6 @@
 pub mod audio;
 pub mod autoaccept;
+pub mod banassist;
 pub mod lcu;
 pub mod league;
 pub mod logger;
@@ -37,6 +38,7 @@ struct TrayUi {
     enabled_item: CheckMenuItem<Wry>,
     update_item: MenuItem<Wry>,
     accept_item: CheckMenuItem<Wry>,
+    ban_item: CheckMenuItem<Wry>,
     role_menu: Submenu<Wry>,
     role_items: Vec<(String, CheckMenuItem<Wry>)>,
     last_key: String,
@@ -56,6 +58,8 @@ struct AppState {
     audio: AudioPlayer,
     config_dir: PathBuf,
     tray: Mutex<Option<TrayUi>>,
+    /// Champion auto-hovered for your ban this champ select.
+    ban_hovered: Mutex<Option<String>>,
     /// Latest match-found popup state (for the settings page).
     ready_check: Mutex<Option<autoaccept::ReadyCheckStatus>>,
     /// Why the auto-accept shortcut couldn't be registered, if it couldn't.
@@ -103,6 +107,7 @@ fn current_status(app: &AppHandle) -> Status {
     let state = app.state::<AppState>();
     let mut st = state.watcher.lock().unwrap().status(&s);
     st.ready_check = state.ready_check.lock().unwrap().clone();
+    st.ban_hovered = state.ban_hovered.lock().unwrap().clone();
     st
 }
 
@@ -268,7 +273,7 @@ fn refresh_tray(app: &AppHandle, st: &Status) {
 
     let kind = match st.state {
         State::Active => IconKind::InGame,
-        State::Client => IconKind::Client,
+        State::Client | State::Spectating => IconKind::Client,
         _ => IconKind::Idle,
     };
     if ui.icon_kind != Some(kind) {
@@ -287,11 +292,17 @@ fn refresh_tray(app: &AppHandle, st: &Status) {
     } else {
         format!("Auto-accept matches ({})", settings.auto_accept_hotkey)
     };
+    let ban_label = match &settings.last_ban {
+        Some(b) => format!("Auto-hover last ban ({})", b.name),
+        None => "Auto-hover last ban".to_string(),
+    };
     let key = format!(
-        "{coarse}|{enabled}|{}|{role_label}|{}|{accept_label}",
-        settings.role_mode, settings.auto_accept
+        "{coarse}|{enabled}|{}|{role_label}|{}|{accept_label}|{}|{ban_label}",
+        settings.role_mode, settings.auto_accept, settings.auto_hover_ban
     );
     if key != ui.last_key {
+        let _ = ui.ban_item.set_checked(settings.auto_hover_ban);
+        let _ = ui.ban_item.set_text(&ban_label);
         let _ = ui.accept_item.set_checked(settings.auto_accept);
         let _ = ui.accept_item.set_text(&accept_label);
         let _ = ui.status_item.set_text(&coarse);
@@ -309,6 +320,14 @@ fn build_tray(app: &AppHandle) -> tauri::Result<TrayUi> {
     let status_item = MenuItem::with_id(app, "status", "Waiting for League", false, None::<&str>)?;
     let enabled_item = CheckMenuItem::with_id(app, "enabled", "Alerts enabled", true, enabled, None::<&str>)?;
     let update_item = MenuItem::with_id(app, "update", "Check for updates", true, None::<&str>)?;
+    let ban_item = CheckMenuItem::with_id(
+        app,
+        "autoban",
+        "Auto-hover last ban",
+        true,
+        current_settings(app).auto_hover_ban,
+        None::<&str>,
+    )?;
     let accept_item = CheckMenuItem::with_id(
         app,
         "autoaccept",
@@ -340,6 +359,7 @@ fn build_tray(app: &AppHandle) -> tauri::Result<TrayUi> {
             &enabled_item,
             &role_menu,
             &accept_item,
+            &ban_item,
             &MenuItem::with_id(app, "test", "Test sound", true, None::<&str>)?,
             &MenuItem::with_id(app, "logs", "Open log folder", true, None::<&str>)?,
             &update_item,
@@ -358,6 +378,17 @@ fn build_tray(app: &AppHandle) -> tauri::Result<TrayUi> {
                 let _ = apply_settings(app, &serde_json::json!({ "roleMode": &id[5..] }));
             }
             "settings" => open_window(app),
+            "autoban" => {
+                let state = app.state::<AppState>();
+                let checked = state
+                    .tray
+                    .lock()
+                    .unwrap()
+                    .as_ref()
+                    .and_then(|ui| ui.ban_item.is_checked().ok())
+                    .unwrap_or(false);
+                let _ = apply_settings(app, &serde_json::json!({ "autoHoverBan": checked }));
+            }
             "autoaccept" => {
                 let state = app.state::<AppState>();
                 let checked = state
@@ -412,6 +443,7 @@ fn build_tray(app: &AppHandle) -> tauri::Result<TrayUi> {
         enabled_item,
         update_item,
         accept_item,
+        ban_item,
         role_menu,
         role_items,
         last_key: String::new(),
@@ -535,6 +567,7 @@ fn spawn_watcher(app: AppHandle) {
         tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
         let mut last_state = None;
         let mut acceptor = autoaccept::AutoAccept::new();
+        let mut bans = banassist::BanAssist::new();
         loop {
             tick.tick().await;
             let settings = current_settings(&app);
@@ -557,6 +590,36 @@ fn spawn_watcher(app: AppHandle) {
             }
             *state.ready_check.lock().unwrap() = rc_status.clone();
             status.ready_check = rc_status;
+            // Champ select: remember your ban, and hover it next time if that's on.
+            let in_champ_select = status.client.as_ref().is_some_and(|c| c.phase == lcu::Phase::ChampSelect);
+            if !in_champ_select {
+                if bans.hovered.is_some() || state.ban_hovered.lock().unwrap().is_some() {
+                    *state.ban_hovered.lock().unwrap() = None;
+                }
+                bans.reset();
+            } else if let Some(session) = lcu.champ_select_session().await {
+                if let Some(champ) = session.my_completed_ban() {
+                    if settings.last_ban.as_ref().map(|b| b.champion_id) != Some(champ) {
+                        let name = lcu.champion_name(champ).await.unwrap_or_else(|| format!("Champion {champ}"));
+                        log(&format!("remembered ban: {name}"));
+                        let _ = apply_settings(&app, &serde_json::json!({ "lastBan": { "championId": champ, "name": name } }));
+                    }
+                }
+                let last = settings.last_ban.as_ref().map(|b| b.champion_id);
+                if let banassist::Decision::Hover { action_id, champion_id } =
+                    bans.step(&session, settings.auto_hover_ban, last)
+                {
+                    let ok = lcu.hover_champion(action_id, champion_id).await;
+                    bans.hovered(champion_id, ok);
+                    let name = settings.last_ban.as_ref().map(|b| b.name.clone()).unwrap_or_default();
+                    log(&format!("auto-hover ban: {} {name}", if ok { "hovered" } else { "couldn't hover" }));
+                    if ok {
+                        *state.ban_hovered.lock().unwrap() = Some(name);
+                    }
+                }
+            }
+            status.ban_hovered = state.ban_hovered.lock().unwrap().clone();
+
             if let Some(r) = &status.ready_check {
                 if r.auto_accepted || r.response == "accepted" {
                     status.line = "Match found — accepted".into();
@@ -585,6 +648,8 @@ fn spawn_watcher(app: AppHandle) {
                         format_clock(Some(game_time))
                     )),
                     Event::GameEnded => log("game ended"),
+                    Event::Spectating(true) => log("replay/spectator game: staying quiet"),
+                    Event::Spectating(false) => log("your game after all: pings on"),
                     Event::GameClosed => log("game closed"),
                     Event::ClientPhase { phase, queue } => match phase {
                         Some(p) => log(&format!(
@@ -654,6 +719,7 @@ pub fn run() {
                 config_dir,
                 tray: Mutex::new(None),
                 ready_check: Mutex::new(None),
+                ban_hovered: Mutex::new(None),
                 hotkey_error: Mutex::new(None),
                 hotkey_capturing: Mutex::new(false),
             });

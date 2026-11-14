@@ -43,6 +43,13 @@ async fn fake_client(state: Arc<Mutex<Fake>>) -> u16 {
         if auth != Some(expected_auth().as_str()) {
             return (401, r#"{"message":"unauthorized"}"#.into());
         }
+        if path == "/lol-champ-select/v1/session/actions/10" {
+            state.lock().unwrap().accepted = true; // reused as "hover received"
+            return (204, String::new());
+        }
+        if path == "/lol-game-data/assets/v1/champion-summary.json" {
+            return (200, r#"[{"id":-1,"name":"None"},{"id":64,"name":"Lee Sin"},{"id":107,"name":"Rengar"}]"#.into());
+        }
         if path == "/lol-matchmaking/v1/ready-check/accept" {
             state.lock().unwrap().accepted = true;
             return (204, String::new());
@@ -160,4 +167,21 @@ async fn accepts_the_ready_check() {
     std::fs::write(dir2.path().join("lockfile"), format!("LeagueClient:1:{port2}:nope:https")).unwrap();
     assert!(!Lcu::new(Some(dir2.path().to_path_buf())).accept_ready_check().await);
     assert!(!state2.lock().unwrap().accepted);
+}
+
+#[tokio::test]
+async fn hover_and_champion_names() {
+    let state = Arc::new(Mutex::new(Fake { accepted: false, phase: "ChampSelect", queue_id: 420, map_id: 11, members: 1 }));
+    let port = fake_client(state.clone()).await;
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(dir.path().join("lockfile"), format!("LeagueClient:1:{port}:{PASSWORD}:https")).unwrap();
+    let lcu = Lcu::new(Some(dir.path().to_path_buf()));
+
+    assert_eq!(lcu.champion_name(107).await.as_deref(), Some("Rengar"));
+    assert_eq!(lcu.champion_name(64).await.as_deref(), Some("Lee Sin"), "cached list");
+    assert_eq!(lcu.champion_name(99999).await, None);
+
+    assert!(lcu.hover_champion(10, 107).await, "PATCH accepted");
+    assert!(state.lock().unwrap().accepted, "fake client got the hover");
+    assert!(!lcu.hover_champion(11, 107).await, "unknown action -> 404 -> false");
 }

@@ -32,6 +32,8 @@ Settings, uploaded sounds and the log are stored in `%APPDATA%\com.thomas.minima
   - If you join partway through a game, it picks up at the next ping without playing the ones you missed.
   - It goes quiet on the end-of-game screen.
 - **Role schedules:** give Top, Jungle, Mid, Bot or Support its own schedule; a role without one uses the default. With **Auto**, your role is picked up in champion select (blind pick and ARAM have none, so the default is used). You can also fix the role in Settings or the tray's **Role** menu.
+- **Replays and spectating:** no pings. The header shows "Watching a replay".
+- **Auto-hover your last ban:** the app remembers the champion you last banned and, when your next ban turn starts, hovers it for you. It never locks it: you still click Ban, or pick someone else. Ban a different champion and that becomes the new one. It won't hover over something you've already hovered, or a champion that's already banned. Toggle it in Settings → Queue & champ select or the tray.
 - **Auto-accept:** when a match is found the app can accept it for you (Settings → Match found). It's off by default and waits 2 s (adjustable) so you can still decline; it never overrides a manual accept or decline. Toggle it from anywhere, even in game, with **Alt+A**: you'll hear a rising beep for on and a falling one for off. Click the shortcut box in Settings and press new keys to rebind it, or ✕ to remove it. The shortcut is reserved system-wide, so pick something you don't use in game. It uses the League client's local API (not officially supported by Riot; not allowed on the Korean server).
 - **Sounds:**
   - 5 built-in sounds, plus uploads in mp3, wav, ogg, flac or m4a format (max 10 MB, the first 30 s are used).

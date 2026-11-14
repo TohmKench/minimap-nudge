@@ -19,11 +19,12 @@ struct Game {
     mode: &'static str,
     map: i64,
     ended: bool,
+    spectator: bool,
 }
 
 impl Default for Game {
     fn default() -> Self {
-        Game { up: true, time: 0.0, mode: "CLASSIC", map: 11, ended: false }
+        Game { up: true, time: 0.0, mode: "CLASSIC", map: 11, ended: false, spectator: false }
     }
 }
 
@@ -65,6 +66,11 @@ async fn start_mock(game: Arc<Mutex<Game>>) -> String {
                         let end = if g.ended { r#",{"EventID":9,"EventName":"GameEnd","EventTime":1,"Result":"Win"}"# } else { "" };
                         ("200 OK", format!(r#"{{"Events":[{{"EventID":0,"EventName":"GameStart","EventTime":0.05}}{end}]}}"#))
                     }
+                    "/liveclientdata/activeplayername" if g.spectator => (
+                        "404 Not Found",
+                        r#"{"errorCode":"RESOURCE_NOT_FOUND","httpStatus":404,"message":"Spectator mode doesn't currently support this feature"}"#.to_string(),
+                    ),
+                    "/liveclientdata/activeplayername" => ("200 OK", r#""Thomas#EUW""#.to_string()),
                     _ => ("404 Not Found", "{}".to_string()),
                 };
                 let resp = format!(
@@ -198,4 +204,22 @@ async fn game_end_and_disabled_stop_pings() {
     let (pings, _) = run(&base, &game, &w, &off, 170.0, 400.0).await;
     assert!(pings.is_empty());
     assert_eq!(w.lock().unwrap().status(&off).state, State::Paused);
+}
+
+#[tokio::test]
+async fn replay_or_spectating_stays_quiet() {
+    let game = Arc::new(Mutex::new(Game { spectator: true, ..Game::default() }));
+    let base = start_mock(game.clone()).await;
+    let w = watcher();
+    let (pings, events) = run(&base, &game, &w, &schedule(), 170.0, 400.0).await;
+    assert!(pings.is_empty(), "no pings while spectating: {pings:?}");
+    assert!(events.contains(&Event::Spectating(true)));
+    assert_eq!(w.lock().unwrap().status(&schedule()).state, State::Spectating);
+
+    // same fake game, but you're the player: pings as normal
+    let game = Arc::new(Mutex::new(Game::default()));
+    let base = start_mock(game.clone()).await;
+    let w = watcher();
+    let (pings, _) = run(&base, &game, &w, &schedule(), 170.0, 400.0).await;
+    assert_eq!(pings, vec![180.0, 360.0]);
 }

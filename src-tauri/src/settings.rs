@@ -52,6 +52,14 @@ pub struct CustomSound {
     pub file: PathBuf,
 }
 
+/// The champion you last banned (remembered for auto-hover).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LastBan {
+    pub champion_id: i64,
+    pub name: String,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 pub struct Settings {
@@ -72,6 +80,9 @@ pub struct Settings {
     pub auto_accept_delay: f64,
     /// Global shortcut that toggles auto-accept, e.g. "Alt+A"; "" = none.
     pub auto_accept_hotkey: String,
+    /// Hover `last_ban` when your ban turn starts.
+    pub auto_hover_ban: bool,
+    pub last_ban: Option<LastBan>,
 }
 
 impl Default for Settings {
@@ -89,6 +100,8 @@ impl Default for Settings {
             auto_accept: false,
             auto_accept_delay: 2.0,
             auto_accept_hotkey: DEFAULT_HOTKEY.into(),
+            auto_hover_ban: false,
+            last_ban: None,
         }
     }
 }
@@ -107,6 +120,9 @@ impl Settings {
         self.auto_accept_delay =
             if self.auto_accept_delay.is_finite() { self.auto_accept_delay.clamp(0.0, 10.0) } else { 2.0 };
         self.auto_accept_hotkey = self.auto_accept_hotkey.trim().to_string();
+        if self.last_ban.as_ref().is_some_and(|b| b.champion_id <= 0) {
+            self.last_ban = None;
+        }
         self.custom_sounds.retain(|c| !c.id.is_empty() && c.file.is_file());
         let known = BUILTIN_SOUNDS.iter().any(|b| b.id == self.sound_id)
             || self.custom_sounds.iter().any(|c| c.id == self.sound_id);

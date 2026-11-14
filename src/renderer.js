@@ -39,6 +39,7 @@ const STATUS_TITLES = {
   paused: 'Reminders paused',
   ineligible: 'In game — staying quiet',
   ended: 'Game over',
+  spectating: 'Watching a replay',
 };
 
 const CLIENT_TITLES = {
@@ -165,6 +166,7 @@ function clientSub(st) {
     case 'champSelect':
       add(c.queue);
       if (c.champSelectStage) add(c.phaseTimeLeft != null ? `${c.champSelectStage} \u2013 ${formatClock(c.phaseTimeLeft)} left` : c.champSelectStage);
+      if (st.banHovered) add(`hovered ${st.banHovered} for your ban`);
       add(pingNote(st));
       break;
     case 'gameStart':
@@ -206,6 +208,8 @@ function renderStatus(st) {
     );
   } else if (st.state === 'ineligible') {
     sub.textContent = `${st.gameMode} isn't Summoner's Rift. Untick the option below to get pings everywhere.`;
+  } else if (st.state === 'spectating') {
+    sub.textContent = 'Replay or spectated game \u2013 no pings until you play.';
   } else if (st.state === 'client') {
     sub.append(...clientSub(st));
   } else if (st.state === 'paused') {
@@ -398,12 +402,22 @@ function renderAccept() {
   if (document.activeElement !== $('acceptDelay')) $('acceptDelay').value = String(s.autoAcceptDelay);
   if (!recording) $('hotkeyBtn').textContent = prettyKeys(s.autoAcceptHotkey);
   $('hotkeyClear').hidden = !s.autoAcceptHotkey;
+  $('autoHoverBan').checked = s.autoHoverBan;
+  const banSub = $('banSub');
+  banSub.replaceChildren();
+  if (s.lastBan) {
+    banSub.append('Hovers ', el('b', {}, s.lastBan.name),
+      ' when your ban turn starts \u2013 you still click Ban. Ban someone else and that becomes the new one.');
+  } else {
+    banSub.textContent = 'Ban a champion once and it\u2019s remembered; next time it\u2019s hovered for you (you still click Ban).';
+  }
   const err = $('hotkeyError');
   err.hidden = !state.hotkeyError;
   err.textContent = state.hotkeyError || '';
 }
 
 $('autoAccept').addEventListener('change', (e) => save({ autoAccept: e.target.checked }));
+$('autoHoverBan').addEventListener('change', (e) => save({ autoHoverBan: e.target.checked }));
 $('acceptDelay').addEventListener('change', (e) => {
   const n = Number(e.target.value);
   if (Number.isFinite(n)) save({ autoAcceptDelay: Math.max(0, Math.min(10, Math.round(n))) });

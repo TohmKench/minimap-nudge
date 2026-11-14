@@ -76,6 +76,22 @@ impl LeagueClient {
         })
     }
 
+    /// Whether the game has a *local player*: `Some(true)` when you're playing,
+    /// `Some(false)` when it says there isn't one (replays and spectating),
+    /// `None` when it couldn't tell (not running, timeout).
+    pub async fn has_active_player(&self) -> Option<bool> {
+        let res = self.http.get(format!("{}/liveclientdata/activeplayername", self.base)).send().await.ok()?;
+        let status = res.status();
+        if status.is_success() {
+            let name: String = res.json().await.ok()?;
+            Some(!name.trim().is_empty())
+        } else if status.is_client_error() {
+            Some(false) // e.g. 404 "Spectator mode doesn't currently support this feature"
+        } else {
+            None
+        }
+    }
+
     /// True once the nexus has fallen (the client keeps serving data on the end screen).
     pub async fn game_ended(&self) -> bool {
         match self.get::<RawEvents>("/liveclientdata/eventdata").await {

@@ -8,6 +8,7 @@
  *   npm run mock-game -- --start 590 --speed 10
  *   npm run mock-game -- --mode ARAM           # check "Summoner's Rift only"
  *   npm run mock-game -- --end-after 120       # send GameEnd after 120 real seconds
+ *   npm run mock-game -- --spectate            # a replay / spectated game (no active player)
  *
  * Client + game (also fakes the League client: lobby -> queue -> champ select -> game):
  *   npm run mock-game -- --client --league-dir C:\temp\fake-league [--position top]
@@ -35,6 +36,8 @@ const MODE = arg('mode', 'CLASSIC');
 const END_AFTER = Number(arg('end-after', 0));
 const PORT = Number(arg('port', 2999));
 const LEAGUE_DIR = arg('league-dir', path.join(os.tmpdir(), 'mock-league'));
+const BAN = Number(arg('ban', 107)); // what "you" ban if nothing is hovered when the ban locks (107 = Rengar)
+const SPECTATE = flag('spectate'); // the game is a replay/spectated one (no active player)
 const POSITION = arg('position', 'jungle'); // your assigned role in champ select (top/jungle/middle/bottom/utility, or "" for blind)
 const MAPS = { CLASSIC: 11, ARAM: 12, CHERRY: 30 };
 const QUEUES = { CLASSIC: 420, ARAM: 450, CHERRY: 1700 };
@@ -83,6 +86,11 @@ const game = https.createServer(tls, (req, res) => {
   if (req.url === '/liveclientdata/gamestats') {
     return json(res, 200, { gameMode: MODE, gameTime: gameTime(), mapName: 'Map11', mapNumber: MAPS[MODE] ?? 11, mapTerrain: 'Default' });
   }
+  if (req.url === '/liveclientdata/activeplayername') {
+    return SPECTATE
+      ? json(res, 404, { errorCode: 'RESOURCE_NOT_FOUND', httpStatus: 404, message: "Spectator mode doesn't currently support this feature" })
+      : json(res, 200, 'Thomas#EUW');
+  }
   if (req.url === '/liveclientdata/eventdata') {
     const Events = [{ EventID: 0, EventName: 'GameStart', EventTime: 0.05 }];
     if (ended()) Events.push({ EventID: 1, EventName: 'GameEnd', EventTime: gameTime(), Result: 'Win' });
@@ -97,9 +105,27 @@ if (CLIENT) {
   const password = 'mock-' + Math.random().toString(36).slice(2, 10);
   const auth = 'Basic ' + Buffer.from(`riot:${password}`).toString('base64');
   let accepted = false;
+  let hovered = 0; // champion hovered on your ban action
+  // Your ban turn: 2-10 s into champ select; it locks whatever is hovered (or --ban).
+  const banState = () => {
+    const t = clientPhase() === 'ChampSelect' ? elapsed() - phaseStart() : (clientPhase() === 'Lobby' || clientPhase() === 'Matchmaking' || clientPhase() === 'ReadyCheck' ? -1 : 99);
+    const done = t >= 10;
+    return { id: 1, actorCellId: 2, type: 'ban', isInProgress: t >= 2 && !done, completed: done, championId: done ? (hovered || BAN) : hovered };
+  };
   const client = https.createServer(tls, (req, res) => {
     if (req.headers.authorization !== auth) return json(res, 401, { message: 'unauthorized' });
     const phase = clientPhase();
+    if (req.method === 'PATCH' && req.url === '/lol-champ-select/v1/session/actions/1') {
+      let body = '';
+      req.on('data', (c) => (body += c));
+      req.on('end', () => {
+        try { hovered = JSON.parse(body).championId || 0; } catch {}
+        console.log(`\n  >> app hovered champion ${hovered} for your ban`);
+        res.statusCode = 204;
+        res.end();
+      });
+      return;
+    }
     if (req.method === 'POST' && req.url === '/lol-matchmaking/v1/ready-check/accept') {
       if (phase === 'ReadyCheck') { accepted = true; console.log('\n  >> ready check ACCEPTED by the app'); }
       res.statusCode = 204;
@@ -120,9 +146,12 @@ if (CLIENT) {
         return json(res, 200, {
           timer: { adjustedTimeLeftInPhase: left, phase: 'BAN_PICK', isInfinite: false },
           localPlayerCellId: 2,
+          actions: [[banState()]],
           myTeam: [{ cellId: 0, assignedPosition: 'top' }, { cellId: 2, assignedPosition: POSITION }, { cellId: 4, assignedPosition: 'utility' }],
         });
       }
+      case '/lol-game-data/assets/v1/champion-summary.json':
+        return json(res, 200, [{ id: -1, name: 'None' }, { id: 64, name: 'Lee Sin' }, { id: 107, name: 'Rengar' }, { id: 121, name: "Kha'Zix" }]);
       default: return json(res, 404, {});
     }
   });

@@ -27,6 +27,8 @@ pub enum State {
     Paused,
     Ineligible,
     Ended,
+    /// A replay or spectated game is running: no pings.
+    Spectating,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -46,6 +48,8 @@ pub struct Status {
     pub role_source: Option<&'static str>,
     /// True when the active role has its own customised schedule.
     pub role_schedule: bool,
+    /// Champion auto-hovered for your ban in this champ select (filled in by the app loop).
+    pub ban_hovered: Option<String>,
     /// Match-found popup state (filled in by the app loop while the ready check is up).
     pub ready_check: Option<crate::autoaccept::ReadyCheckStatus>,
     /// Whether pings will play for the upcoming/current game (false = mode isn't Summoner's Rift and SR-only is on).
@@ -60,6 +64,7 @@ pub enum Event {
     SkippedLate { due: f64, game_time: f64 },
     GameEnded,
     GameClosed,
+    Spectating(bool),
     ClientPhase { phase: Option<ClientPhase>, queue: Option<String> },
 }
 
@@ -76,6 +81,8 @@ pub struct Watcher {
     client: Option<ClientInfo>,
     /// Position from the last champ select; kept through the game, cleared back in the lobby.
     detected_role: Option<String>,
+    /// The running game is a replay / spectated game, not one you're playing.
+    spectating: bool,
 }
 
 impl Default for Watcher {
@@ -91,6 +98,7 @@ impl Default for Watcher {
             end_check_interval: END_CHECK_INTERVAL,
             client: None,
             detected_role: None,
+            spectating: false,
         }
     }
 }
@@ -107,6 +115,15 @@ impl Watcher {
             detected_role: self.detected_role.take(),
             ..Self::default()
         };
+    }
+
+    /// Whether the running game is a replay/spectated one. Returns an event when it changes.
+    pub fn set_spectating(&mut self, v: bool) -> Option<Event> {
+        if !self.in_game || self.spectating == v {
+            return None;
+        }
+        self.spectating = v;
+        Some(Event::Spectating(v))
     }
 
     /// Latest League client state (`None` = client not running). Returns an event when the phase changes.
@@ -214,7 +231,7 @@ impl Watcher {
             let t = stats.game_time;
             if t >= due {
                 let late = t - due;
-                if s.enabled && self.eligible(s) && !self.ended {
+                if s.enabled && self.eligible(s) && !self.ended && !self.spectating {
                     if late <= LATE_TOLERANCE_SEC {
                         events.push(Event::Ping { game_time: t, due });
                     } else {
@@ -230,7 +247,9 @@ impl Watcher {
     pub fn status(&self, s: &Settings) -> Status {
         let (role, role_source) = self.active_role(s);
         let state = if self.in_game {
-            if self.ended {
+            if self.spectating {
+                State::Spectating
+            } else if self.ended {
                 State::Ended
             } else if !self.eligible(s) {
                 State::Ineligible
@@ -263,6 +282,7 @@ impl Watcher {
                 self.game_mode.as_deref().unwrap_or("?")
             ),
             State::Ended => "Game over · waiting for next match".into(),
+            State::Spectating => "Watching a replay or spectating · no pings".into(),
             State::Waiting => "Waiting for League".into(),
         };
         Status {
@@ -278,6 +298,7 @@ impl Watcher {
             role,
             role_source,
             ready_check: None,
+            ban_hovered: None,
             will_ping: self.will_ping(s),
         }
     }
@@ -311,7 +332,19 @@ pub fn client_line(c: &ClientInfo) -> String {
         ClientPhase::GameStart | ClientPhase::InProgress => "Loading into game…".into(),
         ClientPhase::Reconnect => "Reconnect to your game".into(),
         ClientPhase::PostGame => "Post-game".into(),
+        ClientPhase::Spectating => "Spectating a game".into(),
     }
+}
+
+/// Replay or spectated game? The client saying you're in a game wins; otherwise
+/// a game with no local player is someone else's.
+pub async fn detect_spectating(client: &LeagueClient, lcu: &Lcu) -> bool {
+    match lcu.phase().await {
+        Some(ClientPhase::InProgress | ClientPhase::GameStart | ClientPhase::Reconnect) => return false,
+        Some(ClientPhase::Spectating) => return true,
+        _ => {}
+    }
+    client.has_active_player().await == Some(false)
 }
 
 /// One poll: ask the game (and, when not in one, the client), update the watcher.
@@ -324,13 +357,21 @@ pub async fn poll_once(
 ) -> (Vec<Event>, Status) {
     let stats = client.game_stats().await;
     let now = Instant::now();
-    let check_end = stats.is_some() && watcher.lock().unwrap().end_check_due(now);
-    let ended = if check_end { Some(client.game_ended().await) } else { None };
+    // On a new game, then every few seconds: has it ended, and is it really yours?
+    let check = stats.is_some() && {
+        let w = watcher.lock().unwrap();
+        !w.in_game() || w.end_check_due(now)
+    };
+    let ended = if check { Some(client.game_ended().await) } else { None };
+    let spectating = if check { Some(detect_spectating(client, lcu).await) } else { None };
     // The client's state only matters outside a game; skip those calls while playing.
     let client_info = if stats.is_none() { Some(lcu.snapshot().await) } else { None };
     let mut w = watcher.lock().unwrap();
     let effective = w.effective(settings);
     let mut events = w.apply(stats, ended, &effective, now);
+    if let Some(v) = spectating {
+        events.extend(w.set_spectating(v));
+    }
     if let Some(info) = client_info {
         events.extend(w.set_client(info));
     }
@@ -501,6 +542,23 @@ mod tests {
         assert_eq!(w.status(&s).line, "Alerts paused · Champion select · Ranked Solo/Duo");
         assert!(matches!(w.set_client(None), Some(Event::ClientPhase { phase: None, .. })));
         assert_eq!(w.status(&s).line, "Alerts paused");
+    }
+
+    #[test]
+    fn spectating_is_quiet() {
+        let s = settings();
+        let mut w = Watcher::new();
+        let now = Instant::now();
+        assert_eq!(w.set_spectating(true), None, "no game, nothing to flag");
+        w.apply(sr(170.0), None, &s, now);
+        assert_eq!(w.set_spectating(true), Some(Event::Spectating(true)));
+        assert_eq!(w.set_spectating(true), None);
+        assert_eq!(pings(&w.apply(sr(180.5), None, &s, now)), 0, "no ping in a replay");
+        let st = w.status(&s);
+        assert_eq!((st.state, st.line.as_str()), (State::Spectating, "Watching a replay or spectating · no pings"));
+        // a new (real) game resets it
+        w.apply(sr(5.0), None, &s, now);
+        assert_eq!(w.status(&s).state, State::Active);
     }
 
     #[test]

@@ -59,6 +59,8 @@ pub enum Phase {
     InProgress,
     Reconnect,
     PostGame,
+    /// Spectating a live game (the client reports "WatchInProgress").
+    Spectating,
     Other,
 }
 
@@ -74,6 +76,7 @@ impl Phase {
             "InProgress" => Phase::InProgress,
             "Reconnect" => Phase::Reconnect,
             "WaitingForStats" | "PreEndOfGame" | "EndOfGame" => Phase::PostGame,
+            "WatchInProgress" => Phase::Spectating,
             _ => Phase::Other,
         }
     }
@@ -184,6 +187,8 @@ struct CsTimer {
 
 pub struct Lcu {
     http: reqwest::Client,
+    /// Champion id -> name, loaded once from the client's game data.
+    champ_names: Mutex<std::collections::HashMap<i64, String>>,
     /// Folder to look in first (MINIMAP_NUDGE_LEAGUE_DIR, used for testing).
     dir_override: Option<PathBuf>,
     found_dir: Mutex<Option<PathBuf>>,
@@ -202,7 +207,14 @@ impl Lcu {
             .build()
             .expect("lcu http client");
         let scan_cmdline = dir_override.is_none();
-        Self { http, dir_override, found_dir: Mutex::new(None), last_scan: Mutex::new(None), scan_cmdline }
+        Self {
+            http,
+            champ_names: Mutex::new(Default::default()),
+            dir_override,
+            found_dir: Mutex::new(None),
+            last_scan: Mutex::new(None),
+            scan_cmdline,
+        }
     }
 
     pub fn from_env() -> Self {
@@ -265,6 +277,13 @@ impl Lcu {
             return None;
         }
         res.json::<T>().await.ok()
+    }
+
+    /// Just the gameflow phase (one cheap request). `None` = client not running/reachable.
+    pub async fn phase(&self) -> Option<Phase> {
+        let c = self.creds()?;
+        let raw: String = self.get(&c, "/lol-gameflow/v1/gameflow-phase").await?;
+        Some(Phase::from_lcu(&raw))
     }
 
     /// What the client is doing right now. `None` = client not running/reachable.
@@ -350,6 +369,44 @@ impl Lcu {
     pub async fn ready_check(&self) -> Option<ReadyCheck> {
         let c = self.creds()?;
         self.get(&c, "/lol-matchmaking/v1/ready-check").await
+    }
+
+    pub async fn champ_select_session(&self) -> Option<crate::banassist::CsSession> {
+        let c = self.creds()?;
+        self.get(&c, "/lol-champ-select/v1/session").await
+    }
+
+    /// Hovers (doesn't lock) a champion for a champ select action. True if the client took it.
+    pub async fn hover_champion(&self, action_id: i64, champion_id: i64) -> bool {
+        let Some(c) = self.creds() else { return false };
+        match self
+            .http
+            .patch(format!("https://127.0.0.1:{}/lol-champ-select/v1/session/actions/{action_id}", c.port))
+            .basic_auth("riot", Some(&c.password))
+            .json(&serde_json::json!({ "championId": champion_id }))
+            .send()
+            .await
+        {
+            Ok(r) => r.status().is_success(),
+            Err(_) => false,
+        }
+    }
+
+    /// Champion name for an id (e.g. 107 -> "Rengar"), from the client's own game data.
+    pub async fn champion_name(&self, id: i64) -> Option<String> {
+        if let Some(n) = self.champ_names.lock().unwrap().get(&id) {
+            return Some(n.clone());
+        }
+        #[derive(Deserialize)]
+        struct Summary {
+            id: i64,
+            name: String,
+        }
+        let c = self.creds()?;
+        let list: Vec<Summary> = self.get(&c, "/lol-game-data/assets/v1/champion-summary.json").await?;
+        let mut names = self.champ_names.lock().unwrap();
+        names.extend(list.into_iter().filter(|s| s.id > 0).map(|s| (s.id, s.name)));
+        names.get(&id).cloned()
     }
 
     /// Clicks "Accept" on the match-found popup. True if the client took it.

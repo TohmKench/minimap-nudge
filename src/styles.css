@@ -224,6 +224,8 @@ select {
 .accept-title { font-weight: 600; }
 .accept-sub { color: var(--muted); font-size: 13px; }
 .accept-sub input[type="number"] { width: 46px; padding: 1px 4px; }
+.ban-row { margin-top: 16px; padding-top: 14px; border-top: 1px dashed var(--line); }
+.accept-sub b { color: var(--text); font-weight: 600; }
 .hotkey-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-top: 12px; color: var(--muted); }
 .hotkey-row em { font-style: normal; font-size: 12px; }
 .hotkey-controls { display: flex; align-items: center; gap: 4px; }

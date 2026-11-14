@@ -27,6 +27,10 @@ With League open, the settings header should follow along: **League client open 
 
 **Auto-accept:** with League open, press **Alt+A** from any window. You should hear a rising beep, and Settings → Match found shows the switch on. Queue up: when the match pops, the header shows "Auto-accepting in 2s" and the app accepts it for you. Pressing Alt+A again gives a falling beep (off).
 
+**Last ban:** turn on Settings → Queue & champ select → Auto-hover your last ban. In a draft or ranked game, ban as usual; Settings then shows "Hovers <champion>". In your next game, that champion should already be hovered when your ban turn starts.
+
+**Replays:** open a replay from your match history. The header should say "Watching a replay" and nothing should ping.
+
 ## 4. A real game
 
 1. Leave the app in the tray and play a normal Summoner's Rift game, or a Practice Tool session (it uses the same API).

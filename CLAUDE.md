@@ -13,6 +13,7 @@ Windows tray app (Tauri 2 + Rust) that detects a League of Legends match through
   - `settings.rs`: JSON settings; built-in sounds are embedded
   - `audio.rs`: symphonia decode + rodio playback
   - `autoaccept.rs`: pure decision logic for auto-accepting the ready check (lib.rs does the LCU GET/POST)
+  - `banassist.rs`: pure decision logic for remembering your last ban and auto-hovering it (lib.rs does the LCU GET/PATCH)
   - `updates.rs`: self-updater
   - `logger.rs`
 - `tests/schedule-vectors.json`: shared cases that BOTH schedulers must pass. If you change scheduling rules, update the vectors and both `schedule.rs` and `src/schedule.js`.
@@ -47,10 +48,14 @@ Check a release: `curl -sL https://github.com/TohmKench/minimap-nudge/releases/l
 
 ## Behaviour to preserve
 - Role profiles: `roleSchedules` (per role id: top/jungle/middle/bottom/utility) override the default `phases`. `roleMode` is "auto" (role from champ select's assignedPosition, kept through the game and cleared back in lobby) or a fixed role. `Watcher::effective()` swaps in the active role's schedule; always schedule through it.
-- Auto-accept is the only thing that *writes* to the client (POST /lol-matchmaking/v1/ready-check/accept). It's off by default, waits `autoAcceptDelay` (default 2 s), accepts once per pop and never overrides a manual accept or decline. Don't add other client automation (auto pick/ban/lock, chat) without asking Thomas: that's a much greyer area.
+- Only two things *write* to the client, both off by default and both asked for by Thomas:
+  - Auto-accept (POST /lol-matchmaking/v1/ready-check/accept): waits `autoAcceptDelay` (default 2 s), accepts once per pop, never overrides a manual accept or decline.
+  - Auto-hover last ban (PATCH /lol-champ-select/v1/session/actions/{id} with championId, which hovers but never locks): `lastBan` is updated whenever your ban completes; the hover happens once per ban turn, only if nothing is hovered and the champion isn't already banned.
+  - Don't add other client automation (locking picks/bans, instalock, chat) without asking Thomas: that's a much greyer area.
 - The global shortcut (`autoAcceptHotkey`, default Alt+A, tauri-plugin-global-shortcut) toggles auto-accept and plays toggle-on/off sounds. It's re-registered whenever the setting changes, and released while the settings page is recording a new one.
 - Never add enemy summoner spell, ultimate or cooldown tracking/timers (manual or automatic). Riot's third-party policy prohibits it and it puts the user's account at risk.
-- Outside a game the header/tray show the client phase (lobby, queue + timer, ready check, champ select + timer, loading, post-game). In-game state always wins over client state. LCU is polled only while not in a game.
+- Outside a game the header/tray show the client phase (lobby, queue + timer, ready check, champ select + timer, loading, post-game). In-game state always wins over client state. In a game the LCU gets only one cheap phase check every 5 s (for replay detection).
+- Replays/spectating: no pings. `detect_spectating`: the client phase InProgress/GameStart/Reconnect means you're playing; WatchInProgress means spectating; otherwise no active player (`/liveclientdata/activeplayername` 4xx or empty) means a replay. Checked on game detection and every 5 s, so a slow-starting real game isn't silenced for long.
 - Pings follow the in-game clock. No backlog when joining mid-game; a ping more than 10 s late is skipped; quiet after GameEnd; "Summoner's Rift only" means mapNumber 11.
 - Never auto-install updates; installing only happens when the user clicks.
 - A bad audio file must never crash the app (decoders are wrapped in catch_unwind).
