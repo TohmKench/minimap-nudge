@@ -1,4 +1,3 @@
-Auto-accept.
-- Turn on Settings > Match found > Auto-accept, or press Alt+A anywhere (even in game); a rising beep means on, a falling beep off
-- Accepts 2 seconds after the pop (adjustable) so you can still decline
-- Change the shortcut to any key combination in Settings
+Replays and last-ban hover.
+- No more pings while watching a replay or spectating
+- New: auto-hover your last ban. It remembers the champion you banned and hovers them when your next ban turn starts (you still click Ban). Turn it on in Settings > Queue & champ select or the tray
