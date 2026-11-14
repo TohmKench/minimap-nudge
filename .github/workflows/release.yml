@@ -86,3 +86,20 @@ jobs:
           prerelease: false
           includeUpdaterJson: true
           updaterJsonPreferNsis: true
+
+      # A portable copy for people who'd rather not install: the same app exe
+      # tauri-action just built (sounds are embedded, so it's a single file).
+      # It needs WebView2, which Windows 10/11 already have. Clicking "Update"
+      # in a portable copy runs the normal installer, so it becomes an installed copy.
+      - name: Attach portable exe to the release
+        if: steps.v.outputs.skip == 'false'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          V: ${{ steps.v.outputs.version }}
+        run: |
+          exe=src-tauri/target/release/minimap-nudge.exe
+          [ -f "$exe" ] || { echo "::error::$exe not found after the build"; exit 1; }
+          out="Minimap.Nudge_${V}_x64-portable.exe"
+          cp "$exe" "$out"
+          gh release upload "v$V" "$out" --clobber --repo "$GITHUB_REPOSITORY"
