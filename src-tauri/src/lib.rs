@@ -617,6 +617,10 @@ fn spawn_watcher(app: AppHandle) {
                         *state.ban_hovered.lock().unwrap() = Some(name);
                     }
                 }
+                if bans.hovered.is_none() {
+                    // a hover the client dropped
+                    *state.ban_hovered.lock().unwrap() = None;
+                }
             }
             status.ban_hovered = state.ban_hovered.lock().unwrap().clone();
 
