@@ -1,6 +1,6 @@
 {
   "name": "minimap-nudge",
-  "version": "2.5.0",
+  "version": "2.5.1",
   "private": true,
   "description": "Tray app that reminds you to check the minimap during League of Legends matches (Tauri/Rust).",
   "license": "MIT",
