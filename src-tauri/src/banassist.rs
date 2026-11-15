@@ -5,10 +5,17 @@
 //! - When your ban turn starts, hovers it (never locks: you still click Ban).
 //! - Hovers once per ban turn and never replaces something you've hovered,
 //!   and skips a champion that's already been banned.
+//! - Only hovers in the BAN_PICK stage. In draft, the client already marks the
+//!   ban action "in progress" during PLANNING (declare your pick) and accepts a
+//!   hover then, but clears it when bans actually open. So we wait for
+//!   BAN_PICK, and check the hover is still there afterwards; if the client
+//!   dropped it (back to nothing), we try again.
 
 use serde::Deserialize;
 
 const MAX_ATTEMPTS: u8 = 3;
+/// Polls (about 1 s each) to wait for a sent hover to show up before resending.
+const CONFIRM_POLLS: u8 = 3;
 
 #[derive(Debug, Clone, Default, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase", default)]
@@ -22,12 +29,20 @@ pub struct CsAction {
     pub completed: bool,
 }
 
+#[derive(Debug, Clone, Default, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase", default)]
+pub struct CsTimer {
+    /// "PLANNING" | "BAN_PICK" | "FINALIZATION" | "GAME_STARTING" | ...
+    pub phase: Option<String>,
+}
+
 /// The parts of `/lol-champ-select/v1/session` this needs.
 #[derive(Debug, Clone, Default, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase", default)]
 pub struct CsSession {
     pub local_player_cell_id: Option<i64>,
     pub actions: Vec<Vec<CsAction>>,
+    pub timer: CsTimer,
 }
 
 impl CsSession {
@@ -45,6 +60,11 @@ impl CsSession {
         self.my_bans().filter(|a| a.completed && a.champion_id > 0).map(|a| a.champion_id).last()
     }
 
+    /// Bans are open. Blind pick / unknown stage (no timer phase) counts as open.
+    fn bans_open(&self) -> bool {
+        self.timer.phase.as_deref().map_or(true, |p| p == "BAN_PICK")
+    }
+
     fn already_banned(&self, champ: i64) -> bool {
         self.all().any(|a| a.kind == "ban" && a.completed && a.champion_id == champ)
     }
@@ -60,6 +80,10 @@ pub enum Decision {
 pub struct BanAssist {
     action: Option<i64>,
     attempts: u8,
+    /// A hover was sent and the client said OK; waiting to see it in the session.
+    sent: Option<i64>,
+    /// Polls since `sent` without the hover showing.
+    unconfirmed_polls: u8,
     done: bool,
     /// Champion we hovered this champ select (for the status line).
     pub hovered: Option<i64>,
@@ -79,6 +103,9 @@ impl BanAssist {
         let (Some(champ), true) = (last_ban.filter(|c| *c > 0), enabled) else {
             return Decision::Nothing;
         };
+        if !s.bans_open() {
+            return Decision::Nothing;
+        }
         let Some(turn) = s.my_bans().find(|a| a.is_in_progress && !a.completed) else {
             return Decision::Nothing;
         };
@@ -86,7 +113,30 @@ impl BanAssist {
             // a new ban turn (e.g. a second ban phase)
             self.action = Some(turn.id);
             self.attempts = 0;
+            self.sent = None;
+            self.unconfirmed_polls = 0;
             self.done = false;
+        }
+        if let Some(sent) = self.sent {
+            if turn.champion_id == sent {
+                // the client shows our hover: done for this turn
+                self.sent = None;
+                self.done = true;
+                return Decision::Nothing;
+            }
+            if turn.champion_id != 0 {
+                // you picked something else: leave it
+                self.sent = None;
+                self.done = true;
+                return Decision::Nothing;
+            }
+            self.unconfirmed_polls += 1;
+            if self.unconfirmed_polls < CONFIRM_POLLS {
+                return Decision::Nothing;
+            }
+            // the client took the request but the hover never showed (or was cleared): resend
+            self.sent = None;
+            self.hovered = None;
         }
         if self.done || self.attempts >= MAX_ATTEMPTS || turn.champion_id != 0 || s.already_banned(champ) {
             return Decision::Nothing;
@@ -98,7 +148,8 @@ impl BanAssist {
     /// Report the result of a `Decision::Hover`.
     pub fn hovered(&mut self, champion_id: i64, ok: bool) {
         if ok {
-            self.done = true;
+            self.sent = Some(champion_id);
+            self.unconfirmed_polls = 0;
             self.hovered = Some(champion_id);
         }
     }
@@ -114,7 +165,10 @@ mod tests {
         CsAction { id, actor_cell_id: cell, champion_id: champ, kind: "ban".into(), is_in_progress: in_progress, completed }
     }
     fn session(actions: Vec<CsAction>) -> CsSession {
-        CsSession { local_player_cell_id: Some(2), actions: vec![actions] }
+        staged("BAN_PICK", actions)
+    }
+    fn staged(phase: &str, actions: Vec<CsAction>) -> CsSession {
+        CsSession { local_player_cell_id: Some(2), actions: vec![actions], timer: CsTimer { phase: Some(phase.into()) } }
     }
 
     #[test]
@@ -127,8 +181,65 @@ mod tests {
         assert_eq!(b.step(&s, true, Some(RENGAR)), Decision::Hover { action_id: 10, champion_id: RENGAR });
         b.hovered(RENGAR, true);
         assert_eq!(b.hovered, Some(RENGAR));
-        // the client may still report 0 for a moment: still only once
+        // the client may still report 0 for a moment: don't resend straight away
         assert_eq!(b.step(&s, true, Some(RENGAR)), Decision::Nothing);
+        // it shows up: done, never sent again
+        let shown = session(vec![ban(10, 2, RENGAR, true, false)]);
+        for _ in 0..10 {
+            assert_eq!(b.step(&shown, true, Some(RENGAR)), Decision::Nothing);
+        }
+        // even if you then clear it
+        for _ in 0..10 {
+            assert_eq!(b.step(&s, true, Some(RENGAR)), Decision::Nothing);
+        }
+    }
+
+    #[test]
+    fn waits_for_bans_to_open_in_draft() {
+        // Draft: during PLANNING the client already marks the ban action in progress
+        // and accepts a hover, then clears it when bans open. Don't hover then.
+        let mut b = BanAssist::new();
+        let planning = staged("PLANNING", vec![ban(10, 2, 0, true, false)]);
+        for _ in 0..5 {
+            assert_eq!(b.step(&planning, true, Some(RENGAR)), Decision::Nothing);
+        }
+        let open = session(vec![ban(10, 2, 0, true, false)]);
+        assert_eq!(b.step(&open, true, Some(RENGAR)), Decision::Hover { action_id: 10, champion_id: RENGAR });
+        // no stage at all (older client / blind): treated as open
+        let mut b = BanAssist::new();
+        let mut s = session(vec![ban(10, 2, 0, true, false)]);
+        s.timer.phase = None;
+        assert!(matches!(b.step(&s, true, Some(RENGAR)), Decision::Hover { .. }));
+    }
+
+    #[test]
+    fn resends_when_the_client_drops_the_hover() {
+        let mut b = BanAssist::new();
+        let empty = session(vec![ban(10, 2, 0, true, false)]);
+        assert!(matches!(b.step(&empty, true, Some(RENGAR)), Decision::Hover { .. }));
+        b.hovered(RENGAR, true); // client said 204...
+        // ...but the action stays empty
+        let mut sends = 1;
+        for _ in 0..20 {
+            if let Decision::Hover { .. } = b.step(&empty, true, Some(RENGAR)) {
+                sends += 1;
+                b.hovered(RENGAR, true);
+            }
+        }
+        assert_eq!(sends, MAX_ATTEMPTS as i32, "bounded retries");
+    }
+
+    #[test]
+    fn stops_if_you_hover_something_else_after_us() {
+        let mut b = BanAssist::new();
+        let empty = session(vec![ban(10, 2, 0, true, false)]);
+        assert!(matches!(b.step(&empty, true, Some(RENGAR)), Decision::Hover { .. }));
+        b.hovered(RENGAR, true);
+        let lee = session(vec![ban(10, 2, 64, true, false)]);
+        assert_eq!(b.step(&lee, true, Some(RENGAR)), Decision::Nothing);
+        for _ in 0..10 {
+            assert_eq!(b.step(&empty, true, Some(RENGAR)), Decision::Nothing);
+        }
     }
 
     #[test]

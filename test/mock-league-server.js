@@ -106,11 +106,22 @@ if (CLIENT) {
   const auth = 'Basic ' + Buffer.from(`riot:${password}`).toString('base64');
   let accepted = false;
   let hovered = 0; // champion hovered on your ban action
-  // Your ban turn: 2-10 s into champ select; it locks whatever is hovered (or --ban).
+  // Like real draft: 0-4 s PLANNING (the ban action is already "in progress" and the client
+  // accepts a hover, but clears it when bans open), then BAN_PICK. Your ban locks at 12 s
+  // with whatever is hovered (or --ban).
+  const csTime = () => clientPhase() === 'ChampSelect' ? elapsed() - phaseStart() : (clientPhase() === 'Lobby' || clientPhase() === 'Matchmaking' || clientPhase() === 'ReadyCheck' ? -1 : 99);
+  const PLANNING_END = 4;
+  let bansOpened = false;
   const banState = () => {
-    const t = clientPhase() === 'ChampSelect' ? elapsed() - phaseStart() : (clientPhase() === 'Lobby' || clientPhase() === 'Matchmaking' || clientPhase() === 'ReadyCheck' ? -1 : 99);
-    const done = t >= 10;
-    return { id: 1, actorCellId: 2, type: 'ban', isInProgress: t >= 2 && !done, completed: done, championId: done ? (hovered || BAN) : hovered };
+    const t = csTime();
+    if (t < 0) bansOpened = false;
+    if (t >= PLANNING_END && !bansOpened) {
+      bansOpened = true;
+      if (hovered) console.log(`\n  >> bans open: client cleared the hover (${hovered}) made during planning`);
+      hovered = 0;
+    }
+    const done = t >= 12;
+    return { id: 1, actorCellId: 2, type: 'ban', isInProgress: t >= 0 && !done, completed: done, championId: done ? (hovered || BAN) : hovered };
   };
   const client = https.createServer(tls, (req, res) => {
     if (req.headers.authorization !== auth) return json(res, 401, { message: 'unauthorized' });
@@ -143,10 +154,11 @@ if (CLIENT) {
       case '/lol-matchmaking/v1/search': return json(res, 200, { searchState: 'Searching', timeInQueue: elapsed() - phaseStart(), estimatedQueueTime: 95 });
       case '/lol-champ-select/v1/session': {
         const left = Math.max(0, 30 - (elapsed() - phaseStart()) * 2) * 1000;
+        const actions = [[banState()]];
         return json(res, 200, {
-          timer: { adjustedTimeLeftInPhase: left, phase: 'BAN_PICK', isInfinite: false },
+          timer: { adjustedTimeLeftInPhase: left, phase: csTime() < PLANNING_END ? 'PLANNING' : 'BAN_PICK', isInfinite: false },
           localPlayerCellId: 2,
-          actions: [[banState()]],
+          actions,
           myTeam: [{ cellId: 0, assignedPosition: 'top' }, { cellId: 2, assignedPosition: POSITION }, { cellId: 4, assignedPosition: 'utility' }],
         });
       }
