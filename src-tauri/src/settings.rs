@@ -52,12 +52,25 @@ pub struct CustomSound {
     pub file: PathBuf,
 }
 
-/// The champion you last banned (remembered for auto-hover).
+/// The champion you last banned in one game mode + role (remembered for auto-hover).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct LastBan {
     pub champion_id: i64,
     pub name: String,
+    /// Game mode it was banned in, for display (e.g. "Ranked Solo/Duo").
+    #[serde(default)]
+    pub queue: String,
+    /// Role id it was banned in ("" = no assigned role, e.g. blind pick).
+    #[serde(default)]
+    pub role: String,
+}
+
+/// Key into `last_bans`: queue id + assigned role, e.g. "420:middle", "400:any".
+pub fn ban_key(queue_id: Option<i64>, role: Option<&str>) -> String {
+    let q = queue_id.map_or_else(|| "any".to_string(), |q| q.to_string());
+    let r = role.map(str::trim).filter(|r| role_name(r).is_some()).unwrap_or("any");
+    format!("{q}:{r}")
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -80,9 +93,11 @@ pub struct Settings {
     pub auto_accept_delay: f64,
     /// Global shortcut that toggles auto-accept, e.g. "Alt+A"; "" = none.
     pub auto_accept_hotkey: String,
-    /// Hover `last_ban` when your ban turn starts.
+    /// Hover your last ban for this game mode + role when your ban turn starts.
     pub auto_hover_ban: bool,
-    pub last_ban: Option<LastBan>,
+    /// Last ban per game mode + role, keyed by `ban_key`. (Replaces the old
+    /// single `lastBan`, which is dropped.)
+    pub last_bans: BTreeMap<String, LastBan>,
 }
 
 impl Default for Settings {
@@ -101,7 +116,7 @@ impl Default for Settings {
             auto_accept_delay: 2.0,
             auto_accept_hotkey: DEFAULT_HOTKEY.into(),
             auto_hover_ban: false,
-            last_ban: None,
+            last_bans: BTreeMap::new(),
         }
     }
 }
@@ -120,9 +135,7 @@ impl Settings {
         self.auto_accept_delay =
             if self.auto_accept_delay.is_finite() { self.auto_accept_delay.clamp(0.0, 10.0) } else { 2.0 };
         self.auto_accept_hotkey = self.auto_accept_hotkey.trim().to_string();
-        if self.last_ban.as_ref().is_some_and(|b| b.champion_id <= 0) {
-            self.last_ban = None;
-        }
+        self.last_bans.retain(|_, b| b.champion_id > 0);
         self.custom_sounds.retain(|c| !c.id.is_empty() && c.file.is_file());
         let known = BUILTIN_SOUNDS.iter().any(|b| b.id == self.sound_id)
             || self.custom_sounds.iter().any(|c| c.id == self.sound_id);
@@ -260,5 +273,25 @@ mod tests {
         assert!(!s.enabled && !s.summoners_rift_only && s.launch_at_startup);
         assert_eq!(s.phases[1].interval_sec, None);
         assert_eq!(s.sound_id, "builtin:knock");
+    }
+
+    #[test]
+    fn bans_are_keyed_by_mode_and_role() {
+        assert_eq!(ban_key(Some(420), Some("middle")), "420:middle");
+        assert_eq!(ban_key(Some(400), None), "400:any");
+        assert_eq!(ban_key(Some(400), Some("")), "400:any");
+        assert_eq!(ban_key(None, Some("nonsense")), "any:any");
+        // the old single lastBan is dropped; zero ids are cleaned out
+        let s: Settings = serde_json::from_value(json!({
+            "lastBan": {"championId": 246, "name": "Qiyana"},
+            "lastBans": {
+                "420:middle": {"championId": 107, "name": "Rengar", "queue": "Ranked Solo/Duo", "role": "middle"},
+                "400:top": {"championId": 0, "name": "None"}
+            }
+        }))
+        .unwrap();
+        let s = s.sanitized();
+        assert_eq!(s.last_bans.len(), 1);
+        assert_eq!(s.last_bans["420:middle"].name, "Rengar");
     }
 }
