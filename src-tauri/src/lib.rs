@@ -600,7 +600,7 @@ fn spawn_watcher(app: AppHandle) {
                 let role = session.my_position();
                 let key = settings::ban_key(queue_id, role.as_deref());
                 let remembered = settings.last_bans.get(&key);
-                if let Some(champ) = session.my_completed_ban() {
+                if let Some(champ) = bans.my_completed_ban(&session) {
                     if remembered.map(|b| b.champion_id) != Some(champ) {
                         let name = lcu.champion_name(champ).await.unwrap_or_else(|| format!("Champion {champ}"));
                         let queue = status.client.as_ref().and_then(|c| c.queue.clone()).unwrap_or_default();

@@ -1,7 +1,10 @@
 //! Auto-hover your last ban in champ select. Pure decision logic; lib.rs does
 //! the LCU calls.
 //!
-//! - Remembers the champion you last *completed* a ban on.
+//! - Remembers the champion you last *completed* a ban on. A ban counts as
+//!   yours only if we saw it in progress on your seat: after a pick-order
+//!   swap your `localPlayerCellId` changes, and the old seat's completed ban
+//!   belongs to the teammate you swapped with.
 //! - When your ban turn starts, hovers it (never locks: you still click Ban).
 //! - Hovers once per ban turn and never replaces something you've hovered,
 //!   and skips a champion that's already been banned.
@@ -63,10 +66,6 @@ impl CsSession {
         self.all().filter(move |a| a.kind == "ban" && Some(a.actor_cell_id) == me)
     }
 
-    /// Champion you banned in this champ select, once the ban is locked in.
-    pub fn my_completed_ban(&self) -> Option<i64> {
-        self.my_bans().filter(|a| a.completed && a.champion_id > 0).map(|a| a.champion_id).last()
-    }
 
     /// Your assigned role in this champ select ("middle", ...), if the queue assigns one.
     pub fn my_position(&self) -> Option<String> {
@@ -97,6 +96,8 @@ pub enum Decision {
 #[derive(Debug, Default)]
 pub struct BanAssist {
     action: Option<i64>,
+    /// Ban action ids seen in progress on your seat this champ select.
+    mine: Vec<i64>,
     attempts: u8,
     /// A hover was sent and the client said OK; waiting to see it in the session.
     sent: Option<i64>,
@@ -115,6 +116,20 @@ impl BanAssist {
     /// Call when champ select ends.
     pub fn reset(&mut self) {
         *self = Self::default();
+    }
+
+    /// Champion you banned in this champ select, once the ban is locked in.
+    /// Call every poll, so your ban turn is seen while it's in progress.
+    pub fn my_completed_ban(&mut self, s: &CsSession) -> Option<i64> {
+        for a in s.my_bans().filter(|a| a.is_in_progress && !a.completed) {
+            if !self.mine.contains(&a.id) {
+                self.mine.push(a.id);
+            }
+        }
+        s.all()
+            .filter(|a| a.kind == "ban" && a.completed && a.champion_id > 0 && self.mine.contains(&a.id))
+            .map(|a| a.champion_id)
+            .last()
     }
 
     pub fn step(&mut self, s: &CsSession, enabled: bool, last_ban: Option<i64>) -> Decision {
@@ -290,12 +305,43 @@ mod tests {
 
     #[test]
     fn remembers_completed_ban() {
-        assert_eq!(session(vec![ban(10, 2, RENGAR, true, false)]).my_completed_ban(), None, "hovered isn't banned");
-        assert_eq!(session(vec![ban(10, 2, RENGAR, false, true)]).my_completed_ban(), Some(RENGAR));
-        assert_eq!(session(vec![ban(10, 1, 64, false, true)]).my_completed_ban(), None, "someone else's ban");
-        let json = r#"{"localPlayerCellId":2,"actions":[[{"id":10,"actorCellId":2,"championId":107,"type":"ban","isInProgress":false,"completed":true,"pickTurn":1}],[{"id":20,"actorCellId":2,"championId":0,"type":"pick","isInProgress":false,"completed":false}]],"timer":{}}"#;
+        let mut b = BanAssist::new();
+        assert_eq!(b.my_completed_ban(&session(vec![ban(10, 2, RENGAR, true, false)])), None, "hovered isn't banned");
+        assert_eq!(b.my_completed_ban(&session(vec![ban(10, 2, RENGAR, false, true)])), Some(RENGAR), "seen in progress, then locked");
+        let mut b = BanAssist::new();
+        let s = session(vec![ban(10, 1, 64, true, false)]);
+        b.my_completed_ban(&s);
+        assert_eq!(b.my_completed_ban(&session(vec![ban(10, 1, 64, false, true)])), None, "someone else's ban");
+        let mut b = BanAssist::new();
+        let json = r#"{"localPlayerCellId":2,"actions":[[{"id":10,"actorCellId":2,"championId":107,"type":"ban","isInProgress":true,"completed":false,"pickTurn":1}],[{"id":20,"actorCellId":2,"championId":0,"type":"pick","isInProgress":false,"completed":false}]],"timer":{}}"#;
         let s: CsSession = serde_json::from_str(json).unwrap();
-        assert_eq!(s.my_completed_ban(), Some(RENGAR));
+        assert_eq!(b.my_completed_ban(&s), None);
+        let s: CsSession = serde_json::from_str(&json.replace(r#""isInProgress":true,"completed":false"#, r#""isInProgress":false,"completed":true"#)).unwrap();
+        assert_eq!(b.my_completed_ban(&s), Some(RENGAR));
+    }
+
+    #[test]
+    fn pick_order_swap_keeps_your_own_ban() {
+        const ZED: i64 = 238;
+        let mut b = BanAssist::new();
+        // you're cell 2 and ban Rengar; your teammate in cell 4 bans Zed
+        let during = session(vec![ban(10, 2, RENGAR, true, false), ban(11, 4, ZED, true, false)]);
+        assert_eq!(b.my_completed_ban(&during), None);
+        let banned = vec![ban(10, 2, RENGAR, false, true), ban(11, 4, ZED, false, true)];
+        assert_eq!(b.my_completed_ban(&session(banned.clone())), Some(RENGAR));
+        // you swap pick order with cell 4: the client now says you're cell 4
+        let mut swapped = session(banned);
+        swapped.local_player_cell_id = Some(4);
+        for _ in 0..3 {
+            assert_eq!(b.my_completed_ban(&swapped), Some(RENGAR), "Zed is your teammate's ban");
+        }
+    }
+
+    #[test]
+    fn joining_after_bans_remembers_nothing() {
+        // app started mid champ select: we never saw the ban in progress, so don't guess
+        let mut b = BanAssist::new();
+        assert_eq!(b.my_completed_ban(&session(vec![ban(10, 2, RENGAR, false, true)])), None);
     }
 
     #[test]
