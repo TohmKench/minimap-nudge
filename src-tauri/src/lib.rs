@@ -292,10 +292,7 @@ fn refresh_tray(app: &AppHandle, st: &Status) {
     } else {
         format!("Auto-accept matches ({})", settings.auto_accept_hotkey)
     };
-    let ban_label = match &settings.last_ban {
-        Some(b) => format!("Auto-hover last ban ({})", b.name),
-        None => "Auto-hover last ban".to_string(),
-    };
+    let ban_label = "Auto-hover last ban".to_string();
     let key = format!(
         "{coarse}|{enabled}|{}|{role_label}|{}|{accept_label}|{}|{ban_label}",
         settings.role_mode, settings.auto_accept, settings.auto_hover_ban
@@ -598,20 +595,29 @@ fn spawn_watcher(app: AppHandle) {
                 }
                 bans.reset();
             } else if let Some(session) = lcu.champ_select_session().await {
+                // Bans are remembered per game mode + role.
+                let queue_id = status.client.as_ref().and_then(|c| c.queue_id);
+                let role = session.my_position();
+                let key = settings::ban_key(queue_id, role.as_deref());
+                let remembered = settings.last_bans.get(&key);
                 if let Some(champ) = session.my_completed_ban() {
-                    if settings.last_ban.as_ref().map(|b| b.champion_id) != Some(champ) {
+                    if remembered.map(|b| b.champion_id) != Some(champ) {
                         let name = lcu.champion_name(champ).await.unwrap_or_else(|| format!("Champion {champ}"));
-                        log(&format!("remembered ban: {name}"));
-                        let _ = apply_settings(&app, &serde_json::json!({ "lastBan": { "championId": champ, "name": name } }));
+                        let queue = status.client.as_ref().and_then(|c| c.queue.clone()).unwrap_or_default();
+                        let role = role.clone().unwrap_or_default();
+                        log(&format!("remembered ban: {name} ({key})"));
+                        let mut all = settings.last_bans.clone();
+                        all.insert(key.clone(), settings::LastBan { champion_id: champ, name, queue, role });
+                        let _ = apply_settings(&app, &serde_json::json!({ "lastBans": all }));
                     }
                 }
-                let last = settings.last_ban.as_ref().map(|b| b.champion_id);
+                let last = remembered.map(|b| b.champion_id);
                 if let banassist::Decision::Hover { action_id, champion_id } =
                     bans.step(&session, settings.auto_hover_ban, last)
                 {
                     let ok = lcu.hover_champion(action_id, champion_id).await;
                     bans.hovered(champion_id, ok);
-                    let name = settings.last_ban.as_ref().map(|b| b.name.clone()).unwrap_or_default();
+                    let name = remembered.map(|b| b.name.clone()).unwrap_or_default();
                     log(&format!("auto-hover ban: {} {name}", if ok { "hovered" } else { "couldn't hover" }));
                     if ok {
                         *state.ban_hovered.lock().unwrap() = Some(name);

@@ -405,12 +405,22 @@ function renderAccept() {
   $('autoHoverBan').checked = s.autoHoverBan;
   const banSub = $('banSub');
   banSub.replaceChildren();
-  if (s.lastBan) {
-    banSub.append('Hovers ', el('b', {}, s.lastBan.name),
-      ' when your ban turn starts \u2013 you still click Ban. Ban someone else and that becomes the new one.');
-  } else {
-    banSub.textContent = 'Ban a champion once and it\u2019s remembered; next time it\u2019s hovered for you (you still click Ban).';
-  }
+  banSub.textContent = 'Your last ban is remembered separately for each game mode and role, and hovered next time you play that mode and role (you still click Ban).';
+  const bans = Object.entries(s.lastBans || {});
+  $('banList').replaceChildren(...bans
+    .sort(([, a], [, b]) => (a.queue || '').localeCompare(b.queue || '') || (a.role || '').localeCompare(b.role || ''))
+    .map(([key, b]) => el('div', { class: 'ban-item' },
+      el('span', { class: 'ban-where' }, [b.queue || 'Any mode', b.role ? roleName(b.role) : 'Any role'].join(' \u00b7 ')),
+      el('b', {}, b.name),
+      el('button', {
+        class: 'icon', title: 'Forget this ban', 'aria-label': `Forget ${b.name}`,
+        onclick: () => {
+          const next = { ...state.settings.lastBans };
+          delete next[key];
+          save({ lastBans: next });
+        },
+      }, '\u2715'))));
+  $('banList').hidden = bans.length === 0;
   const err = $('hotkeyError');
   err.hidden = !state.hotkeyError;
   err.textContent = state.hotkeyError || '';

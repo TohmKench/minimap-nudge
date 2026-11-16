@@ -36,6 +36,13 @@ pub struct CsTimer {
     pub phase: Option<String>,
 }
 
+#[derive(Debug, Clone, Default, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase", default)]
+pub struct CsMember {
+    pub cell_id: Option<i64>,
+    pub assigned_position: Option<String>,
+}
+
 /// The parts of `/lol-champ-select/v1/session` this needs.
 #[derive(Debug, Clone, Default, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase", default)]
@@ -43,6 +50,7 @@ pub struct CsSession {
     pub local_player_cell_id: Option<i64>,
     pub actions: Vec<Vec<CsAction>>,
     pub timer: CsTimer,
+    pub my_team: Vec<CsMember>,
 }
 
 impl CsSession {
@@ -58,6 +66,16 @@ impl CsSession {
     /// Champion you banned in this champ select, once the ban is locked in.
     pub fn my_completed_ban(&self) -> Option<i64> {
         self.my_bans().filter(|a| a.completed && a.champion_id > 0).map(|a| a.champion_id).last()
+    }
+
+    /// Your assigned role in this champ select ("middle", ...), if the queue assigns one.
+    pub fn my_position(&self) -> Option<String> {
+        self.my_team
+            .iter()
+            .find(|m| m.cell_id.is_some() && m.cell_id == self.local_player_cell_id)
+            .and_then(|m| m.assigned_position.as_deref())
+            .map(|p| p.trim().to_ascii_lowercase())
+            .filter(|p| crate::settings::role_name(p).is_some())
     }
 
     /// Bans are open. Blind pick / unknown stage (no timer phase) counts as open.
@@ -168,7 +186,7 @@ mod tests {
         staged("BAN_PICK", actions)
     }
     fn staged(phase: &str, actions: Vec<CsAction>) -> CsSession {
-        CsSession { local_player_cell_id: Some(2), actions: vec![actions], timer: CsTimer { phase: Some(phase.into()) } }
+        CsSession { local_player_cell_id: Some(2), actions: vec![actions], timer: CsTimer { phase: Some(phase.into()) }, my_team: vec![] }
     }
 
     #[test]
@@ -278,5 +296,14 @@ mod tests {
         let json = r#"{"localPlayerCellId":2,"actions":[[{"id":10,"actorCellId":2,"championId":107,"type":"ban","isInProgress":false,"completed":true,"pickTurn":1}],[{"id":20,"actorCellId":2,"championId":0,"type":"pick","isInProgress":false,"completed":false}]],"timer":{}}"#;
         let s: CsSession = serde_json::from_str(json).unwrap();
         assert_eq!(s.my_completed_ban(), Some(RENGAR));
+    }
+
+    #[test]
+    fn reads_my_assigned_role() {
+        let json = r#"{"localPlayerCellId":2,"myTeam":[{"cellId":0,"assignedPosition":"top"},{"cellId":2,"assignedPosition":"MIDDLE"}]}"#;
+        let s: CsSession = serde_json::from_str(json).unwrap();
+        assert_eq!(s.my_position().as_deref(), Some("middle"));
+        let blind = r#"{"localPlayerCellId":2,"myTeam":[{"cellId":2,"assignedPosition":""}]}"#;
+        assert_eq!(serde_json::from_str::<CsSession>(blind).unwrap().my_position(), None);
     }
 }
