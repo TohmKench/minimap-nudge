@@ -1,1 +1,1 @@
-Auto-hover last ban now actually hovers: it waits for the ban phase to open (the client was clearing hovers made during planning) and re-hovers if the client drops it.
+Auto-hover ban now remembers your last ban separately for each game mode and role, and only hovers the one for the mode and role you're in. Saved bans are listed in settings, each with a button to forget it.
