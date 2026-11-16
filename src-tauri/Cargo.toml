@@ -1,6 +1,6 @@
 [package]
 name = "minimap-nudge"
-version = "2.6.0"
+version = "2.6.1"
 description = "Tray app that reminds you to check the minimap during League of Legends matches"
 authors = ["Thomas"]
 license = "MIT"

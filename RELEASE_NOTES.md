@@ -1,1 +1,1 @@
-Auto-hover ban now remembers your last ban separately for each game mode and role, and only hovers the one for the mode and role you're in. Saved bans are listed in settings, each with a button to forget it.
+Swapping pick order after banning no longer saves your teammate's ban as yours.
