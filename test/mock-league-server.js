@@ -11,7 +11,9 @@
  *   npm run mock-game -- --spectate            # a replay / spectated game (no active player)
  *
  * Client + game (also fakes the League client: lobby -> queue -> champ select -> game):
- *   npm run mock-game -- --client --league-dir C:\temp\fake-league [--position top]
+ *   npm run mock-game -- --client --league-dir C:\temp\fake-league [--position top] [--swap]
+ *   --swap: at 13 s into champ select (after bans lock) you swap pick order with cell 4,
+ *   whose player banned Zed; for 1.5 s the client reports cell 4's role as yours
  *   then start the app with MINIMAP_NUDGE_LEAGUE_DIR=C:\temp\fake-league
  *   (the real client must be closed; it uses the same lockfile idea)
  *
@@ -38,6 +40,7 @@ const PORT = Number(arg('port', 2999));
 const LEAGUE_DIR = arg('league-dir', path.join(os.tmpdir(), 'mock-league'));
 const BAN = Number(arg('ban', 107)); // what "you" ban if nothing is hovered when the ban locks (107 = Rengar)
 const SPECTATE = flag('spectate'); // the game is a replay/spectated one (no active player)
+const SWAP = flag('swap'); // swap pick order with a teammate after bans
 const POSITION = arg('position', 'jungle'); // your assigned role in champ select (top/jungle/middle/bottom/utility, or "" for blind)
 const MAPS = { CLASSIC: 11, ARAM: 12, CHERRY: 30 };
 const QUEUES = { CLASSIC: 420, ARAM: 450, CHERRY: 1700 };
@@ -154,12 +157,19 @@ if (CLIENT) {
       case '/lol-matchmaking/v1/search': return json(res, 200, { searchState: 'Searching', timeInQueue: elapsed() - phaseStart(), estimatedQueueTime: 95 });
       case '/lol-champ-select/v1/session': {
         const left = Math.max(0, 30 - (elapsed() - phaseStart()) * 2) * 1000;
-        const actions = [[banState()]];
+        const t = csTime();
+        const done = t >= 12;
+        const teammateBan = { id: 2, actorCellId: 4, type: 'ban', isInProgress: t >= 0 && !done, completed: done, championId: 238 };
+        const actions = [[banState(), teammateBan]];
+        const swapped = SWAP && t >= 13;
+        if (SWAP && t >= 13 && t < 13.5) console.log('\n  >> you swapped pick order with cell 4 (their ban was Zed)');
+        // right after the swap the roles still follow the cells for a moment
+        const rolesMoved = swapped && t >= 14.5;
         return json(res, 200, {
           timer: { adjustedTimeLeftInPhase: left, phase: csTime() < PLANNING_END ? 'PLANNING' : 'BAN_PICK', isInfinite: false },
-          localPlayerCellId: 2,
+          localPlayerCellId: swapped ? 4 : 2,
           actions,
-          myTeam: [{ cellId: 0, assignedPosition: 'top' }, { cellId: 2, assignedPosition: POSITION }, { cellId: 4, assignedPosition: 'utility' }],
+          myTeam: [{ cellId: 0, assignedPosition: 'top' }, { cellId: 2, assignedPosition: rolesMoved ? 'utility' : POSITION }, { cellId: 4, assignedPosition: rolesMoved ? POSITION : 'utility' }],
         });
       }
       case '/lol-game-data/assets/v1/champion-summary.json':

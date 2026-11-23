@@ -1,10 +1,15 @@
 //! Auto-hover your last ban in champ select. Pure decision logic; lib.rs does
 //! the LCU calls.
 //!
-//! - Remembers the champion you last *completed* a ban on. A ban counts as
-//!   yours only if we saw it in progress on your seat: after a pick-order
-//!   swap your `localPlayerCellId` changes, and the old seat's completed ban
-//!   belongs to the teammate you swapped with.
+//! - Remembers the champion you last *completed* a ban on. Ban actions belong
+//!   to seats (cells), and a pick-order swap moves you to another seat (your
+//!   `localPlayerCellId` changes), even during the ranked ban phase where the
+//!   whole team bans at once. So a ban is yours if it was in progress on the
+//!   seat you were in at the last poll before it locked: swap away and your
+//!   old seat's ban is your teammate's; swap onto a seat and its ban is yours.
+//! - The role used for the per-role memory is the one seen when champ select
+//!   started, so a swap (or a moment where the client reports the role of the
+//!   seat you just left or joined) can't file the ban under a teammate's role.
 //! - When your ban turn starts, hovers it (never locks: you still click Ban).
 //! - Hovers once per ban turn and never replaces something you've hovered,
 //!   and skips a champion that's already been banned.
@@ -15,6 +20,7 @@
 //!   dropped it (back to nothing), we try again.
 
 use serde::Deserialize;
+use std::collections::HashMap;
 
 const MAX_ATTEMPTS: u8 = 3;
 /// Polls (about 1 s each) to wait for a sent hover to show up before resending.
@@ -96,8 +102,12 @@ pub enum Decision {
 #[derive(Debug, Default)]
 pub struct BanAssist {
     action: Option<i64>,
-    /// Ban action ids seen in progress on your seat this champ select.
-    mine: Vec<i64>,
+    /// Ban actions seen in progress this champ select: was it on your seat at the last poll?
+    on_my_seat: HashMap<i64, bool>,
+    /// Your completed bans already reported by `my_completed_ban`.
+    reported: Vec<i64>,
+    /// Your role, the first time champ select showed one.
+    role: Option<String>,
     attempts: u8,
     /// A hover was sent and the client said OK; waiting to see it in the session.
     sent: Option<i64>,
@@ -118,18 +128,33 @@ impl BanAssist {
         *self = Self::default();
     }
 
-    /// Champion you banned in this champ select, once the ban is locked in.
+    /// Your role for this champ select ("middle", ...), read once when it starts and
+    /// kept: pick-order swaps don't change your role.
+    pub fn role(&mut self, s: &CsSession) -> Option<String> {
+        if self.role.is_none() {
+            self.role = s.my_position();
+        }
+        self.role.clone()
+    }
+
+    /// Champion you just banned, reported once when the ban locks in.
     /// Call every poll, so your ban turn is seen while it's in progress.
     pub fn my_completed_ban(&mut self, s: &CsSession) -> Option<i64> {
-        for a in s.my_bans().filter(|a| a.is_in_progress && !a.completed) {
-            if !self.mine.contains(&a.id) {
-                self.mine.push(a.id);
+        let me = s.local_player_cell_id;
+        let mut newly = None;
+        for a in s.all().filter(|a| a.kind == "ban") {
+            if a.is_in_progress && !a.completed {
+                self.on_my_seat.insert(a.id, Some(a.actor_cell_id) == me);
+            } else if a.completed
+                && a.champion_id > 0
+                && self.on_my_seat.get(&a.id) == Some(&true)
+                && !self.reported.contains(&a.id)
+            {
+                self.reported.push(a.id);
+                newly = Some(a.champion_id);
             }
         }
-        s.all()
-            .filter(|a| a.kind == "ban" && a.completed && a.champion_id > 0 && self.mine.contains(&a.id))
-            .map(|a| a.champion_id)
-            .last()
+        newly
     }
 
     pub fn step(&mut self, s: &CsSession, enabled: bool, last_ban: Option<i64>) -> Decision {
@@ -308,6 +333,7 @@ mod tests {
         let mut b = BanAssist::new();
         assert_eq!(b.my_completed_ban(&session(vec![ban(10, 2, RENGAR, true, false)])), None, "hovered isn't banned");
         assert_eq!(b.my_completed_ban(&session(vec![ban(10, 2, RENGAR, false, true)])), Some(RENGAR), "seen in progress, then locked");
+        assert_eq!(b.my_completed_ban(&session(vec![ban(10, 2, RENGAR, false, true)])), None, "reported once");
         let mut b = BanAssist::new();
         let s = session(vec![ban(10, 1, 64, true, false)]);
         b.my_completed_ban(&s);
@@ -333,8 +359,62 @@ mod tests {
         let mut swapped = session(banned);
         swapped.local_player_cell_id = Some(4);
         for _ in 0..3 {
-            assert_eq!(b.my_completed_ban(&swapped), Some(RENGAR), "Zed is your teammate's ban");
+            assert_eq!(b.my_completed_ban(&swapped), None, "Zed is your teammate's ban");
         }
+    }
+
+    #[test]
+    fn swap_during_ranked_bans() {
+        // Ranked: the whole team bans at once. You (cell 2) hover Locke, then swap
+        // pick order with cell 4 while their Draven ban is still in progress.
+        const LOCKE: i64 = 9001;
+        const DRAVEN: i64 = 119;
+        let mut b = BanAssist::new();
+        let mut s = session(vec![ban(10, 2, LOCKE, true, false), ban(11, 4, DRAVEN, true, false)]);
+        assert_eq!(b.my_completed_ban(&s), None);
+        s.local_player_cell_id = Some(4);
+        assert_eq!(b.my_completed_ban(&s), None);
+        // your teammate (now in cell 2) locks Locke: not your ban
+        let s2 = |locke_done: bool, draven_done: bool| {
+            let mut s = session(vec![ban(10, 2, LOCKE, !locke_done, locke_done), ban(11, 4, DRAVEN, !draven_done, draven_done)]);
+            s.local_player_cell_id = Some(4);
+            s
+        };
+        assert_eq!(b.my_completed_ban(&s2(true, false)), None);
+        // you lock Draven on your new seat: that's what you banned
+        assert_eq!(b.my_completed_ban(&s2(true, true)), Some(DRAVEN));
+        assert_eq!(b.my_completed_ban(&s2(true, true)), None);
+
+        // Same swap, but you'd locked Locke before swapping: Locke is yours, and
+        // your teammate's later Draven isn't.
+        let mut b = BanAssist::new();
+        assert_eq!(b.my_completed_ban(&session(vec![ban(10, 2, LOCKE, true, false), ban(11, 4, DRAVEN, true, false)])), None);
+        assert_eq!(b.my_completed_ban(&session(vec![ban(10, 2, LOCKE, false, true), ban(11, 4, DRAVEN, true, false)])), Some(LOCKE));
+        let mut after = session(vec![ban(10, 2, LOCKE, false, true), ban(11, 4, DRAVEN, true, false)]);
+        after.local_player_cell_id = Some(4);
+        assert_eq!(b.my_completed_ban(&after), None);
+        // Draven's seat is yours now and it was still in progress, so if it
+        // locks now, you locked it
+        let mut locked = session(vec![ban(10, 2, LOCKE, false, true), ban(11, 4, DRAVEN, false, true)]);
+        locked.local_player_cell_id = Some(4);
+        assert_eq!(b.my_completed_ban(&locked), Some(DRAVEN));
+    }
+
+    #[test]
+    fn role_is_kept_through_a_swap() {
+        let member = |cell, pos: &str| CsMember { cell_id: Some(cell), assigned_position: Some(pos.into()) };
+        let mut b = BanAssist::new();
+        let mut s = session(vec![]);
+        s.my_team = vec![];
+        assert_eq!(b.role(&s), None, "team not loaded yet");
+        s.my_team = vec![member(2, "bottom"), member(4, "jungle")];
+        assert_eq!(b.role(&s).as_deref(), Some("bottom"));
+        // after a swap the client says you're cell 4 (and, for a moment or for good,
+        // that cell's role): you're still bottom
+        s.local_player_cell_id = Some(4);
+        assert_eq!(b.role(&s).as_deref(), Some("bottom"));
+        b.reset();
+        assert_eq!(b.role(&s).as_deref(), Some("jungle"), "next champ select reads it again");
     }
 
     #[test]
