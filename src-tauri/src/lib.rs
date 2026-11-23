@@ -595,9 +595,9 @@ fn spawn_watcher(app: AppHandle) {
                 }
                 bans.reset();
             } else if let Some(session) = lcu.champ_select_session().await {
-                // Bans are remembered per game mode + role.
+                // Bans are remembered per game mode + role (the role you started champ select with).
                 let queue_id = status.client.as_ref().and_then(|c| c.queue_id);
-                let role = session.my_position();
+                let role = bans.role(&session);
                 let key = settings::ban_key(queue_id, role.as_deref());
                 let remembered = settings.last_bans.get(&key);
                 if let Some(champ) = bans.my_completed_ban(&session) {
